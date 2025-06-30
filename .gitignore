@@ -36,3 +36,6 @@ Thumbs.db
 
 # Google Cloud credentials
 *.json
+
+# Google Cloud Vision API
+GOOGLE_APPLICATION_CREDENTIALS=google-credentials.json
