@@ -1,0 +1,9 @@
+Flask==2.3.3
+python-dotenv==1.0.0
+requests==2.31.0
+Pillow>=9.0.0
+google-cloud-vision==3.4.4
+google-generativeai==0.3.2
+Flask-SQLAlchemy==3.0.5
+psycopg2-binary==2.9.7
+APScheduler==3.10.4
