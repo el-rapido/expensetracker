@@ -515,6 +515,12 @@ ${data.message}
                 return 'Verification failed', 403
         
         elif request.method == 'POST':
+            
+            logger.info("✅ Incoming POST received")
+            logger.info(f"Headers: {dict(request.headers)}")
+            logger.info(f"Body: {request.get_data(as_text=True)}")
+
+
             # Enhanced message processing with detailed logging
             try:
                 # Log raw request data
