@@ -491,10 +491,12 @@ ${data.message}
 </html>'''
     
     # UPDATED WEBHOOK ROUTE WITH FULL MESSAGE PROCESSING
+# 
+
     @app.route('/webhook', methods=['GET', 'POST']) # type: ignore
     def whatsapp_webhook():
         if request.method == 'GET':
-            # Meta sends these specific parameters
+            # Webhook verification (existing code)
             mode = request.args.get('hub.mode')
             token = request.args.get('hub.verify_token')
             challenge = request.args.get('hub.challenge')
@@ -505,7 +507,6 @@ ${data.message}
             print(f"Expected token: {app.config['WHATSAPP_VERIFY_TOKEN']}")
             print(f"Challenge: {challenge}")
             
-            # Meta expects mode=subscribe and correct token
             if mode == 'subscribe' and token == app.config['WHATSAPP_VERIFY_TOKEN']:
                 print("Webhook verification successful")
                 return challenge
@@ -514,27 +515,64 @@ ${data.message}
                 return 'Verification failed', 403
         
         elif request.method == 'POST':
-            # Message processing
+            # Enhanced message processing with detailed logging
             try:
-                data = request.get_json()
-                logger.info(f"Received webhook data: {json.dumps(data, indent=2)}")
+                # Log raw request data
+                raw_data = request.get_data(as_text=True)
+                logger.info(f"🔍 RAW WEBHOOK DATA: {raw_data}")
                 
-                # Check if we have message handler
+                # Log request headers
+                headers = dict(request.headers)
+                logger.info(f"🔍 WEBHOOK HEADERS: {headers}")
+                
+                # Parse JSON
+                data = request.get_json()
+                logger.info(f"🔍 PARSED WEBHOOK JSON: {json.dumps(data, indent=2)}")
+                
+                # Check if data exists
+                if not data:
+                    logger.warning("❌ No JSON data received")
+                    return jsonify({"status": "error", "message": "No data"}), 400
+                
+                # Check for entry field
+                if 'entry' not in data:
+                    logger.warning(f"❌ No 'entry' field in data: {data.keys()}")
+                    return jsonify({"status": "ok", "message": "No entry field"}), 200
+                
+                # Log entry details
+                entry = data.get('entry', [])
+                logger.info(f"🔍 ENTRY FIELD: {json.dumps(entry, indent=2)}")
+                
+                # Check if message handler exists
                 if not message_handler:
-                    logger.warning("Message handler not available")
+                    logger.error("❌ Message handler not available")
                     return jsonify({"status": "ok", "message": "Handler not available"}), 200
+                
+                # Log before processing
+                logger.info("✅ About to process message with handler")
                 
                 # Process the incoming message
                 message_handler.handle_incoming_message(data)
                 
+                logger.info("✅ Message processing completed")
                 return jsonify({"status": "ok", "message": "Processed"}), 200
                 
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ JSON parsing failed: {e}")
+                logger.error(f"Raw data: {request.get_data(as_text=True)}")
+                return jsonify({"status": "error", "message": "Invalid JSON"}), 400
+                
             except Exception as e:
-                logger.error(f"Webhook processing failed: {e}")
+                logger.error(f"❌ Webhook processing failed: {e}")
+                logger.error(f"Exception type: {type(e).__name__}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                
                 if 'data' in locals():
-                    logger.error(f"Webhook data: {json.dumps(data, indent=2)}") # type: ignore
+                    logger.error(f"Data that caused error: {json.dumps(data, indent=2)}") # type: ignore
                 else:
-                    logger.error("No webhook data available")
+                    logger.error("No data available for error context")
+                    
                 return jsonify({"status": "error", "message": str(e)}), 500
     
     # Process receipt 
