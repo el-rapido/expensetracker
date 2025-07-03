@@ -1,8 +1,12 @@
 from flask import Flask, request, jsonify
 from config import Config
 from models import db, User, Expense
+from  flask_cors import CORS
 from services.database_service import DatabaseService
 from services.whatsapp_service import WhatsAppService
+from services.sms_service import SMSService
+from services.monthly_tracking_service import MonthlyTrackingService
+from services.scheduler_service import SchedulerService
 from services.exchange_rate_service import ExchangeRateService
 from services.receipt_workflow import ReceiptWorkflow
 from services.message_handler import MessageHandler
@@ -16,49 +20,90 @@ import os
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 load_dotenv(override=True)
+
+# Debug print
+print("=== ENVIRONMENT DEBUG ===")
+print(f"WHATSAPP_ACCESS_TOKEN set: {bool(os.getenv('WHATSAPP_ACCESS_TOKEN'))}")
+print(f"WHATSAPP_PHONE_NUMBER_ID: {os.getenv('WHATSAPP_PHONE_NUMBER_ID')}")
+print(f"WHATSAPP_VERIFY_TOKEN: {os.getenv('WHATSAPP_VERIFY_TOKEN')}")
+print("========================")
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+    CORS(app)
     
     # Database setup
     app.config['SQLALCHEMY_DATABASE_URI'] = app.config['DATABASE_URL']
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     db.init_app(app)
-    llm_service = LLMService(app.config.get('GEMINI_API_KEY'))
     
-   # Initialize WhatsApp service (only if credentials are available)
-    whatsapp_service = None
-    message_handler = None
-    
-
-    exchange_rate_service = ExchangeRateService(
-            app.config['POS_RATE'], 
-            app.config['ATM_RATE']
-        )    
-   #Initialize OCR Service
+    #Initialize OCR Service
     ocr_service = OCRService()
     llm_service = LLMService(app.config.get('GEMINI_API_KEY'))
+    exchange_rate_service = ExchangeRateService(app.config['POS_RATE'], app.config['ATM_RATE'])
+    receipt_workflow = ReceiptWorkflow(exchange_rate_service)
+    
+    # Initialize SMS service
+    sms_service = SMSService(
+        aws_access_key=app.config.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_key=app.config.get('AWS_SECRET_ACCESS_KEY'),
+        aws_region=app.config.get('AWS_REGION', 'us-east-1')
+    )
+    
+    # Initialize monthly tracking
+    monthly_tracking = MonthlyTrackingService(sms_service)
+    
+    # Initialize scheduler
+    scheduler = SchedulerService(monthly_tracking)
+    scheduler.setup_monthly_summaries()  # Set up automatic monthly summaries
 
-    if app.config.get('WHATSAPP_ACCESS_TOKEN') and app.config.get('WHATSAPP_PHONE_NUMBER_ID'):
+    # Initialize WhatsApp service with direct environment access
+    whatsapp_access_token = os.getenv('WHATSAPP_ACCESS_TOKEN')
+    whatsapp_phone_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
+
+    print(f"Direct env access - Token: {bool(whatsapp_access_token)}")
+    print(f"Direct env access - Phone ID: {whatsapp_phone_id}")
+
+    if whatsapp_access_token and whatsapp_phone_id:
         try:
             whatsapp_service = WhatsAppService(
-                app.config['WHATSAPP_ACCESS_TOKEN'],
-                app.config['WHATSAPP_PHONE_NUMBER_ID']
+                whatsapp_access_token,
+                whatsapp_phone_id
             )
-            message_handler = MessageHandler(whatsapp_service)
             logger.info("WhatsApp service initialized")
         except Exception as e:
             logger.error(f"Failed to initialize WhatsApp service: {e}")
             whatsapp_service = None
-            message_handler = None
     else:
         logger.warning("WhatsApp credentials not found - running without WhatsApp integration")
+        whatsapp_service = None
+
+    # Set message_handler to None for now since we don't need it yet
+    message_handler = None
         
+    if whatsapp_service:
+        message_handler = MessageHandler(whatsapp_service)
+        logger.info("Message handler initialized")
+    else:
+        message_handler = None
+
     with app.app_context():
         db.create_all()
         logger.info("Database tables created")
+    
+    @app.route('/debug-aws')
+    def debug_aws():
+        import os
+        return jsonify({
+            "aws_access_key_set": bool(os.getenv('AWS_ACCESS_KEY_ID')),
+            "aws_secret_key_set": bool(os.getenv('AWS_SECRET_ACCESS_KEY')),
+            "aws_region": os.getenv('AWS_REGION'),
+            "aws_access_key_first_4_chars": os.getenv('AWS_ACCESS_KEY_ID', '')[:4] if os.getenv('AWS_ACCESS_KEY_ID') else None,
+            "sms_service_enabled": sms_service.is_available() if 'sms_service' in locals() else False
+        })    
     
     @app.route('/debug-env')
     def debug_env():
@@ -92,6 +137,7 @@ def create_app():
                 "error": str(e),
                 "type": type(e).__name__
             })
+    
     @app.route('/test-path-debug')
     def test_path_debug():
         import os
@@ -106,6 +152,7 @@ def create_app():
             "full_path_exists": os.path.exists(full_path) if full_path else False,
             "files_in_current_dir": os.listdir(current_dir)
         })
+    
     # Main route
     @app.route('/')
     def index():
@@ -186,18 +233,18 @@ def create_app():
             # Step 6: Create success message
             success_message = f"""✅ Receipt Saved Successfully!
 
-    **This Purchase:**
-    🏪 {expense_data['merchant']}
-    💰 ₺{expense_data['amount_tl']:.2f} → {expense_data['amount_mwk']:.2f} MWK
-    📊 Rate: {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
-    📅 Date: {expense_data['expense_date']}
+**This Purchase:**
+🏪 {expense_data['merchant']}
+💰 ₺{expense_data['amount_tl']:.2f} → {expense_data['amount_mwk']:.2f} MWK
+📊 Rate: {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
+📅 Date: {expense_data['expense_date']}
 
-    **Monthly Summary ({expense_data['month_year']}):**
-    💵 {monthly_total['mwk_total']:.2f} MWK total
-    ₺ {monthly_total['tl_total']:.2f} TL total
-    🧾 {monthly_total['transaction_count']} transactions
+**Monthly Summary ({expense_data['month_year']}):**
+💵 {monthly_total['mwk_total']:.2f} MWK total
+₺ {monthly_total['tl_total']:.2f} TL total
+🧾 {monthly_total['transaction_count']} transactions
 
-    Use "total" command to see current month anytime."""
+Use "total" command to see current month anytime."""
             
             return jsonify({
                 "status": "success",
@@ -219,161 +266,254 @@ def create_app():
                 "message": f"Processing failed: {str(e)}"
             }), 500
 
-
-   
-    # Test interface for receipt processing
+    # New routes for monthly features
+    @app.route('/monthly-summary/<user_id>')
+    @app.route('/monthly-summary/<user_id>/<month_year>')
+    def get_monthly_summary(user_id, month_year=None):
+        """Get monthly summary for user"""
+        try:
+            if not month_year:
+                month_year = datetime.now().strftime('%Y-%m')
+            
+            # Get user
+            user = DatabaseService.get_or_create_user(user_id)
+            
+            # Get enhanced summary
+            summary = monthly_tracking.get_enhanced_monthly_summary(user.id, month_year)
+            
+            # Generate report
+            report = monthly_tracking.generate_monthly_report(user.id, month_year)
+            
+            return jsonify({
+                "status": "success",
+                "month_year": month_year,
+                "summary": summary,
+                "report": report
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
     
+    @app.route('/send-test-sms/<phone_number>')
+    def send_test_sms(phone_number):
+        """Send test SMS"""
+        try:
+            result = sms_service.send_test_sms(phone_number)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "error": str(e)
+            }), 500
+    
+    @app.route('/trigger-monthly-summaries')
+    def trigger_monthly_summaries():
+        """Manually trigger monthly summaries (for testing)"""
+        try:
+            result = monthly_tracking.send_monthly_summaries()
+            return jsonify({
+                "status": "success",
+                "result": result
+            })
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
+    
+    @app.route('/scheduled-jobs')
+    def view_scheduled_jobs():
+        """View scheduled jobs"""
+        try:
+            jobs = scheduler.get_scheduled_jobs()
+            return jsonify({
+                "status": "success",
+                "jobs": jobs
+            })
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
+    
+    # Test interface for receipt processing
     @app.route('/test-interface')
     def test_interface():
         return '''<!DOCTYPE html>
-    <html>
-    <head>
-        <title>Receipt Processor</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #f0f0f0; }
-            .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-            h2 { color: #25D366; text-align: center; }
-            .info-box { background: #e8f5e8; padding: 15px; border-radius: 8px; margin: 20px 0; }
-            input[type="file"] { margin: 15px 0; padding: 10px; width: 90%; }
-            .btn { background: #25D366; color: white; padding: 12px 25px; border: none; border-radius: 8px; cursor: pointer; margin: 5px; }
-            .result { margin-top: 20px; padding: 20px; background: #f9f9f9; border-radius: 8px; }
-            .rate-btn { background: #28a745; width: 45%; display: inline-block; }
-            .atm-btn { background: #007bff; }
-            pre { background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>🤖 Receipt Processor Test</h2>
-            
-            <div class="info-box">
-                <strong>Exchange Rates:</strong><br>
-                🏪 POS Rate: 1 TL = 51.00 MWK<br>
-                🏧 ATM Rate: 1 TL = 54.00 MWK
-            </div>
-            
-            <div>
-                <input type="file" id="fileInput" accept="image/*" required>
-                <button class="btn" onclick="processReceipt()">📸 Process Receipt</button>
-            </div>
-            
-            <div id="result" class="result" style="display:none;">
-                <div id="content"></div>
-            </div>
+<html>
+<head>
+    <title>Receipt Processor</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #f0f0f0; }
+        .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { color: #25D366; text-align: center; }
+        .info-box { background: #e8f5e8; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        input[type="file"] { margin: 15px 0; padding: 10px; width: 90%; }
+        .btn { background: #25D366; color: white; padding: 12px 25px; border: none; border-radius: 8px; cursor: pointer; margin: 5px; }
+        .result { margin-top: 20px; padding: 20px; background: #f9f9f9; border-radius: 8px; }
+        .rate-btn { background: #28a745; width: 45%; display: inline-block; }
+        .atm-btn { background: #007bff; }
+        pre { background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🤖 Receipt Processor Test</h2>
+        
+        <div class="info-box">
+            <strong>Exchange Rates:</strong><br>
+            🏪 POS Rate: 1 TL = 51.00 MWK<br>
+            🏧 ATM Rate: 1 TL = 54.00 MWK
         </div>
-
-    <script>
-    let receiptData = null;
-
-    function processReceipt() {
-        const fileInput = document.getElementById('fileInput');
-        const file = fileInput.files[0];
         
-        if (!file) {
-            alert('Please select a file first!');
-            return;
+        <div>
+            <input type="file" id="fileInput" accept="image/*" required>
+            <button class="btn" onclick="processReceipt()">📸 Process Receipt</button>
+        </div>
+        
+        <div id="result" class="result" style="display:none;">
+            <div id="content"></div>
+        </div>
+    </div>
+
+<script>
+let receiptData = null;
+
+function processReceipt() {
+    const fileInput = document.getElementById('fileInput');
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        alert('Please select a file first!');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('receipt', file);
+    
+    document.getElementById('result').style.display = 'block';
+    document.getElementById('content').innerHTML = '<p>📄 Processing receipt...</p>';
+    
+    fetch('/process-receipt', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Response:', data);
+        
+        if (data.status === 'success' && data.stage === 'rate_selection') {
+            receiptData = data;
+            showRateButtons(data);
+        } else {
+            document.getElementById('content').innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
         }
-        
-        const formData = new FormData();
-        formData.append('receipt', file);
-        
-        document.getElementById('result').style.display = 'block';
-        document.getElementById('content').innerHTML = '<p>📄 Processing receipt...</p>';
-        
-        fetch('/process-receipt', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
-        .then(data => {
-            console.log('Response:', data);
-            
-            if (data.status === 'success' && data.stage === 'rate_selection') {
-                receiptData = data;
-                showRateButtons(data);
-            } else {
-                document.getElementById('content').innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            document.getElementById('content').innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
-        });
-    }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        document.getElementById('content').innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
+    });
+}
 
-    function showRateButtons(data) {
-        const merchant = data.extracted_data.merchant_name;
-        const amount = data.extracted_data.total_amount;
-        const posAmount = data.rate_selection.pos_conversion.mwk_amount;
-        const atmAmount = data.rate_selection.atm_conversion.mwk_amount;
-        
-        document.getElementById('content').innerHTML = `
-            <h3>📋 Receipt Processed Successfully!</h3>
-            <div style="background: white; padding: 15px; border-radius: 5px; margin: 10px 0; border: 1px solid #ddd;">
-                <strong>🏪 ${merchant}</strong><br>
-                <strong>💰 ₺${amount}</strong><br>
-                <strong>📅 ${data.extracted_data.date}</strong>
-            </div>
-            <h4>💱 Choose Exchange Rate:</h4>
-            <button class="btn rate-btn" onclick="saveReceipt('POS')">
-                🏪 POS Rate<br>
-                <small>${posAmount.toFixed(2)} MWK</small>
-            </button>
-            <button class="btn rate-btn atm-btn" onclick="saveReceipt('ATM')">
-                🏧 ATM Rate<br>
-                <small>${atmAmount.toFixed(2)} MWK</small>
-            </button>
-        `;
-    }
+function showRateButtons(data) {
+    const merchant = data.extracted_data.merchant_name;
+    const amount = data.extracted_data.total_amount;
+    const posAmount = data.rate_selection.pos_conversion.mwk_amount;
+    const atmAmount = data.rate_selection.atm_conversion.mwk_amount;
+    
+    document.getElementById('content').innerHTML = `
+        <h3>📋 Receipt Processed Successfully!</h3>
+        <div style="background: white; padding: 15px; border-radius: 5px; margin: 10px 0; border: 1px solid #ddd;">
+            <strong>🏪 ${merchant}</strong><br>
+            <strong>💰 ₺${amount}</strong><br>
+            <strong>📅 ${data.extracted_data.date}</strong>
+        </div>
+        <h4>💱 Choose Exchange Rate:</h4>
+        <button class="btn rate-btn" onclick="saveReceipt('POS')">
+            🏪 POS Rate<br>
+            <small>${posAmount.toFixed(2)} MWK</small>
+        </button>
+        <button class="btn rate-btn atm-btn" onclick="saveReceipt('ATM')">
+            🏧 ATM Rate<br>
+            <small>${atmAmount.toFixed(2)} MWK</small>
+        </button>
+    `;
+}
 
-    function saveReceipt(rateType) {
-        document.getElementById('content').innerHTML = '<p>💾 Saving receipt to database...</p>';
-        
-        fetch('/select-rate', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                extracted_data: receiptData.extracted_data,
-                rate_type: rateType,
-                user_id: 'test_user_web_interface'
-            })
+function saveReceipt(rateType) {
+    document.getElementById('content').innerHTML = '<p>💾 Saving receipt to database...</p>';
+    
+    fetch('/select-rate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            extracted_data: receiptData.extracted_data,
+            rate_type: rateType,
+            user_id: 'test_user_web_interface'
         })
-        .then(response => response.json())
-        .then(data => {
-            console.log('Save response:', data);
-            
-            if (data.status === 'success') {
-                document.getElementById('content').innerHTML = `
-                    <div style="background: #d4edda; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb;">
-                        <h3>✅ Receipt Saved Successfully!</h3>
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; white-space: pre-wrap; font-family: monospace;">
-    ${data.message}
-                        </div>
-                        <br>
-                        <button class="btn" onclick="location.reload()">🔄 Process Another Receipt</button>
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Save response:', data);
+        
+        if (data.status === 'success') {
+            document.getElementById('content').innerHTML = `
+                <div style="background: #d4edda; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb;">
+                    <h3>✅ Receipt Saved Successfully!</h3>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; white-space: pre-wrap; font-family: monospace;">
+${data.message}
                     </div>
-                `;
-            } else {
-                document.getElementById('content').innerHTML = '<pre style="color: red;">' + JSON.stringify(data, null, 2) + '</pre>';
-            }
-        })
-        .catch(error => {
-            console.error('Save error:', error);
-            document.getElementById('content').innerHTML = '<p style="color: red;">Error saving: ' + error.message + '</p>';
-        });
-    }
-    </script>
-    </body>
-    </html>'''
+                    <br>
+                    <button class="btn" onclick="location.reload()">🔄 Process Another Receipt</button>
+                </div>
+            `;
+        } else {
+            document.getElementById('content').innerHTML = '<pre style="color: red;">' + JSON.stringify(data, null, 2) + '</pre>';
+        }
+    })
+    .catch(error => {
+        console.error('Save error:', error);
+        document.getElementById('content').innerHTML = '<p style="color: red;">Error saving: ' + error.message + '</p>';
+    });
+}
+</script>
+</body>
+</html>'''
     
-  
+    #Webhook for WhatsApp Integration
+    @app.route('/webhook', methods=['GET', 'POST'])
+    def whatsapp_webhook():
+        if request.method == 'GET':
+            # Meta sends these specific parameters
+            mode = request.args.get('hub.mode')
+            token = request.args.get('hub.verify_token')
+            challenge = request.args.get('hub.challenge')
+            
+            print(f"Webhook verification:")
+            print(f"Mode: {mode}")
+            print(f"Token received: {token}")
+            print(f"Expected token: {app.config['WHATSAPP_VERIFY_TOKEN']}")
+            print(f"Challenge: {challenge}")
+            
+            # Meta expects mode=subscribe and correct token
+            if mode == 'subscribe' and token == app.config['WHATSAPP_VERIFY_TOKEN']:
+                print("Webhook verification successful")
+                return challenge
+            else:
+                print("Webhook verification failed")
+                return 'Verification failed', 403
+        
+        elif request.method == 'POST':
+            data = request.get_json()
+            logger.info(f"Received webhook: {data}")
+            return jsonify({"status": "ok"}), 200
     
-    
-
     # Process receipt 
-    
     @app.route('/process-receipt', methods=['POST'])
     def process_receipt():
         """Process receipt using OCR + LLM + Rate Selection"""
@@ -432,8 +572,7 @@ def create_app():
                 "message": f"Processing failed: {str(e)}"
             }), 500
 
-     
-  # Test WhatsApp message sending
+    # Test WhatsApp message sending
     @app.route('/test-message/<phone_number>')
     def test_message(phone_number):
         if not whatsapp_service:
@@ -536,7 +675,40 @@ def create_app():
                 "status": "error", 
                 "message": f"Expense test failed: {str(e)}"
             }), 500
-    
+# Add these routes to your app.py
+
+    @app.route('/test-whatsapp-text/<phone_number>')
+    def test_whatsapp_text(phone_number):
+        """Test text message sending"""
+        if not whatsapp_service:
+            return jsonify({"error": "WhatsApp service not available"}), 500
+        
+        result = whatsapp_service.send_message(
+            phone_number,
+            "🤖 Test text message from Dr Budget Bot! This should work now! ✅"
+        )
+        
+        return jsonify({
+            "status": "success" if result else "failed",
+            "result": result
+        })
+
+    @app.route('/test-whatsapp-template/<phone_number>')
+    def test_whatsapp_template(phone_number):
+        """Test template message sending"""
+        if not whatsapp_service:
+            return jsonify({"error": "WhatsApp service not available"}), 500
+        
+        result = whatsapp_service.send_template_message(
+            phone_number,
+            "hello_world",
+            "en_US"
+        )
+        
+        return jsonify({
+            "status": "success" if result else "failed", 
+            "result": result
+        })
     # View all expenses (for debugging)
     @app.route('/expenses')
     def view_expenses():
@@ -568,7 +740,6 @@ def create_app():
             }), 500
     
     return app
-
 if __name__ == '__main__':
     app = create_app()
     app.run(debug=True, port=5000)
