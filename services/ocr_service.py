@@ -1,6 +1,9 @@
 import logging
-from google.cloud import vision
+import os
+import json
 import io
+from google.cloud import vision
+from google.oauth2 import service_account
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -9,10 +12,32 @@ class OCRService:
     def __init__(self):
         """Initialize Google Cloud Vision client"""
         try:
-            self.client = vision.ImageAnnotatorClient()
-            logger.info("Google Cloud Vision client initialized")
+            # Method 1: Try environment variable (for production)
+            credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+            
+            if credentials_json:
+                logger.info("Using Google credentials from environment variable")
+                credentials_info = json.loads(credentials_json)
+                credentials = service_account.Credentials.from_service_account_info(credentials_info)
+                self.client = vision.ImageAnnotatorClient(credentials=credentials)
+                logger.info("Google Cloud Vision client initialized from environment")
+                
+            # Method 2: Try file (for local development)
+            elif os.path.exists('google-credentials.json'):
+                logger.info("Using Google credentials from file")
+                self.client = vision.ImageAnnotatorClient.from_service_account_file('google-credentials.json')
+                logger.info("Google Cloud Vision client initialized from file")
+                
+            # Method 3: Try default credentials (for Google Cloud deployment)
+            else:
+                logger.info("Trying default Google credentials")
+                self.client = vision.ImageAnnotatorClient()
+                logger.info("Google Cloud Vision client initialized with default credentials")
+                
         except Exception as e:
             logger.error(f"Failed to initialize Vision client: {e}")
+            logger.error(f"GOOGLE_CREDENTIALS_JSON set: {bool(os.getenv('GOOGLE_CREDENTIALS_JSON'))}")
+            logger.error(f"google-credentials.json exists: {os.path.exists('google-credentials.json')}")
             self.client = None
     
     def extract_text_from_image(self, image_data):
@@ -21,7 +46,7 @@ class OCRService:
         if not self.client:
             return {
                 "success": False,
-                "error": "OCR service not available",
+                "error": "OCR service not available - Google credentials not configured",
                 "text": "",
                 "confidence": 0
             }
@@ -116,4 +141,4 @@ class OCRService:
             
         except Exception as e:
             logger.error(f"Image preprocessing failed: {e}")
-            return image_data  # Return original if preprocessing failss
+            return image_data  # Return original if preprocessing fails
