@@ -56,8 +56,11 @@ class MessageHandler:
             
             logger.info(f"Processing {message_type} message from {from_number}")
             
-            # Mark as read
-            self.whatsapp.mark_as_read(message_id)
+            # Try to mark as read, but don't fail if it doesn't work
+            try:
+                self.whatsapp.mark_as_read(message_id)
+            except Exception as read_error:
+                logger.warning(f"Failed to mark message as read (continuing anyway): {read_error}")
             
             # Get or create user
             user = DatabaseService.get_or_create_user(from_number)
@@ -74,7 +77,9 @@ class MessageHandler:
                 
         except Exception as e:
             logger.error(f"Error processing message: {e}")
-    
+            # Continue processing other messages even if one fails
+
+
     def handle_text_message(self, message, from_number, user):
         """Handle text messages"""
         text = message.get('text', {}).get('body', '').lower().strip()

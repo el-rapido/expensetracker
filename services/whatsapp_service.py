@@ -164,6 +164,9 @@ class WhatsAppService:
             logger.error(f"Failed to download media: {e}")
             return None
     
+  
+        
+
     def mark_as_read(self, message_id):
         """Mark message as read"""
         url = f"{self.base_url}/messages"
@@ -181,8 +184,12 @@ class WhatsAppService:
         
         try:
             response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            return True
+            if response.status_code == 200:
+                logger.info(f"Message {message_id} marked as read")
+                return True
+            else:
+                logger.warning(f"Failed to mark message as read: {response.status_code} - {response.text}")
+                return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to mark as read: {e}")
+            logger.warning(f"Failed to mark as read (non-critical): {e}")
             return False
