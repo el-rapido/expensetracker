@@ -748,7 +748,10 @@ ${data.message}
     
     return app
 
+app = create_app()
+
 if __name__ == '__main__':
-    app = create_app()
-    # Disable debug mode to prevent Facebook account issues
-    app.run(debug=False, port=5000)
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug)
