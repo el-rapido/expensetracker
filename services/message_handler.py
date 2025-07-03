@@ -1,21 +1,44 @@
 import logging
-from services.whatsapp_service import WhatsAppService
+import json
+from datetime import datetime
 from services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
 class MessageHandler:
-    def __init__(self, whatsapp_service):
+    def __init__(self, whatsapp_service, ocr_service=None, llm_service=None, exchange_rate_service=None, monthly_tracking=None):
         self.whatsapp = whatsapp_service
+        self.ocr_service = ocr_service
+        self.llm_service = llm_service
+        self.exchange_rate_service = exchange_rate_service
+        self.monthly_tracking = monthly_tracking
+        
+        # Store pending receipts for rate selection
+        self.pending_receipts = {}
+        
+        # Store pending manual entries for rate selection
+        self.pending_manual_entries = {}
+        
+        # Store manual entry states (amount -> merchant -> rate)
+        self.manual_entry_states = {}
+        
+        logger.info("Message handler initialized with services")
     
     def handle_incoming_message(self, webhook_data):
         """Process incoming WhatsApp messages"""
         try:
-            # Extract message data
-            entry = webhook_data.get('entry', [])[0]
-            changes = entry.get('changes', [])[0]
-            value = changes.get('value', {})
-            
+            # Extract message data from webhook
+            entry = webhook_data.get('entry', [])
+            if not entry:
+                logger.warning("No entry in webhook data")
+                return
+                
+            changes = entry[0].get('changes', [])
+            if not changes:
+                logger.warning("No changes in webhook entry")
+                return
+                
+            value = changes[0].get('value', {})
             messages = value.get('messages', [])
             
             for message in messages:
@@ -26,28 +49,37 @@ class MessageHandler:
     
     def process_message(self, message):
         """Process individual message"""
-        message_type = message.get('type')
-        from_number = message.get('from')
-        message_id = message.get('id')
-        
-        # Mark as read
-        self.whatsapp.mark_as_read(message_id)
-        
-        # Get or create user
-        user = DatabaseService.get_or_create_user(from_number)
-        
-        if message_type == 'text':
-            self.handle_text_message(message, from_number, user)
-        elif message_type == 'image':
-            self.handle_image_message(message, from_number, user)
-        elif message_type == 'interactive':
-            self.handle_interactive_message(message, from_number, user)
-        else:
-            self.send_help_message(from_number)
+        try:
+            message_type = message.get('type')
+            from_number = message.get('from')
+            message_id = message.get('id')
+            
+            logger.info(f"Processing {message_type} message from {from_number}")
+            
+            # Mark as read
+            self.whatsapp.mark_as_read(message_id)
+            
+            # Get or create user
+            user = DatabaseService.get_or_create_user(from_number)
+            
+            if message_type == 'text':
+                self.handle_text_message(message, from_number, user)
+            elif message_type == 'image':
+                self.handle_image_message(message, from_number, user)
+            elif message_type == 'interactive':
+                self.handle_interactive_message(message, from_number, user)
+            else:
+                logger.info(f"Unsupported message type: {message_type}")
+                self.send_help_message(from_number)
+                
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
     
     def handle_text_message(self, message, from_number, user):
         """Handle text messages"""
         text = message.get('text', {}).get('body', '').lower().strip()
+        
+        logger.info(f"Processing text: '{text}' from {from_number}")
         
         if text in ['hi', 'hello', 'hey', 'start']:
             self.send_welcome_message(from_number)
@@ -55,36 +87,213 @@ class MessageHandler:
             self.send_help_message(from_number)
         elif text in ['total', 'balance', 'summary']:
             self.send_monthly_total(from_number, user.id)
+        elif text in ['manual', 'entry', 'add', 'lost receipt', 'no receipt']:
+            self.start_manual_entry(from_number)
+        elif text.upper() in ['POS', 'ATM']:
+            self.handle_rate_selection(from_number, user, text.upper())
+        elif self.is_amount_entry(text):
+            self.handle_manual_amount(from_number, user, text)
+        elif from_number in self.manual_entry_states and self.manual_entry_states[from_number].get('awaiting_merchant'):
+            self.handle_manual_merchant(from_number, user, text)
         else:
             self.send_help_message(from_number)
     
     def handle_image_message(self, message, from_number, user):
         """Handle receipt images"""
-        media_id = message.get('image', {}).get('id')
-        
-        if media_id:
-            # For now, just acknowledge receipt
+        try:
+            media_id = message.get('image', {}).get('id')
+            
+            if not media_id:
+                self.whatsapp.send_message(
+                    from_number,
+                    "❌ Could not receive image. Please try again."
+                )
+                return
+            
+            # Send processing message
             self.whatsapp.send_message(
                 from_number,
-                "📄 Receipt received! Processing...\n\n(OCR feature will be added tomorrow)"
+                "📄 Receipt received! Processing... ⏳"
             )
-        else:
+            
+            # Check if services are available
+            if not self.ocr_service or not self.llm_service:
+                self.whatsapp.send_message(
+                    from_number,
+                    "❌ Receipt processing service not available. Please try again later."
+                )
+                return
+            
+            # Download image
+            image_data = self.whatsapp.download_media(media_id)
+            if not image_data:
+                self.whatsapp.send_message(
+                    from_number,
+                    "❌ Could not download image. Please try again."
+                )
+                return
+            
+            # Process receipt
+            self.process_receipt_image(from_number, user, image_data)
+            
+        except Exception as e:
+            logger.error(f"Error handling image: {e}")
             self.whatsapp.send_message(
                 from_number,
-                "❌ Could not receive image. Please try again."
+                f"❌ Error processing image: {str(e)}"
+            )
+    
+    def process_receipt_image(self, from_number, user, image_data):
+        """Process receipt image with OCR + LLM"""
+        try:
+            # Step 1: OCR
+            ocr_result = self.ocr_service.extract_text_from_image(image_data) # type: ignore
+            
+            if not ocr_result['success']:
+                self.whatsapp.send_message(
+                    from_number,
+                    f"❌ Could not read text from image: {ocr_result['error']}"
+                )
+                return
+            
+            # Step 2: LLM Processing
+            llm_result = self.llm_service.process_receipt_text(ocr_result['text']) # type: ignore
+            
+            if not llm_result['success']:
+                self.whatsapp.send_message(
+                    from_number,
+                    f"❌ Could not process receipt: {llm_result['error']}"
+                )
+                return
+            
+            # Step 3: Show rate selection
+            extracted_data = llm_result['data']
+            rate_selection = self.exchange_rate_service.create_rate_selection_message(extracted_data) # type: ignore
+            
+            # Store pending receipt
+            self.pending_receipts[from_number] = extracted_data
+            
+            # Send rate selection message
+            self.whatsapp.send_message(from_number, rate_selection['message'])
+            
+            # Send rate selection buttons
+            self.whatsapp.send_interactive_message(
+                from_number,
+                "Choose your rate:",
+                [
+                    {"id": "pos_rate", "title": "🏪 POS Rate"},
+                    {"id": "atm_rate", "title": "🏧 ATM Rate"}
+                ]
+            )
+            
+        except Exception as e:
+            logger.error(f"Receipt processing error: {e}")
+            self.whatsapp.send_message(
+                from_number,
+                f"❌ Receipt processing failed: {str(e)}"
             )
     
     def handle_interactive_message(self, message, from_number, user):
         """Handle button clicks"""
-        button_reply = message.get('interactive', {}).get('button_reply', {})
-        button_id = button_reply.get('id')
-        
-        if button_id == 'pos_rate':
-            self.whatsapp.send_message(from_number, "✅ POS rate selected!")
-        elif button_id == 'atm_rate':
-            self.whatsapp.send_message(from_number, "✅ ATM rate selected!")
-        else:
-            self.send_help_message(from_number)
+        try:
+            button_reply = message.get('interactive', {}).get('button_reply', {})
+            button_id = button_reply.get('id')
+            
+            logger.info(f"Button clicked: {button_id} by {from_number}")
+            
+            if button_id == 'pos_rate':
+                self.handle_rate_selection(from_number, user, 'POS')
+            elif button_id == 'atm_rate':
+                self.handle_rate_selection(from_number, user, 'ATM')
+            else:
+                self.send_help_message(from_number)
+                
+        except Exception as e:
+            logger.error(f"Error handling interactive message: {e}")
+    
+    def handle_rate_selection(self, from_number, user, rate_type):
+        """Handle rate selection and save receipt or manual entry"""
+        try:
+            extracted_data = None
+            is_manual_entry = False
+            
+            # Check if we have pending receipt
+            if from_number in self.pending_receipts:
+                extracted_data = self.pending_receipts[from_number]
+                is_manual_entry = False
+            elif from_number in self.pending_manual_entries:
+                extracted_data = self.pending_manual_entries[from_number]
+                is_manual_entry = True
+            else:
+                self.whatsapp.send_message(
+                    from_number,
+                    "❌ No pending transaction found. Please send a receipt image or use 'manual' for manual entry."
+                )
+                return
+            
+            # Calculate conversion
+            conversion = self.exchange_rate_service.calculate_conversion( # type: ignore
+                extracted_data['total_amount'], 
+                rate_type
+            )
+            
+            # Prepare expense data
+            expense_date = datetime.strptime(extracted_data['date'], '%Y-%m-%d').date()
+            month_year = expense_date.strftime('%Y-%m')
+            
+            expense_data = {
+                'merchant': extracted_data['merchant_name'],
+                'amount_tl': conversion['tl_amount'],
+                'amount_mwk': conversion['mwk_amount'],
+                'rate_type': conversion['rate_type'],
+                'rate_used': conversion['rate_used'],
+                'expense_date': expense_date,
+                'month_year': month_year,
+                'items': extracted_data.get('items', []),
+                'confidence': 'manual' if is_manual_entry else extracted_data.get('confidence', 'medium')
+            }
+            
+            # Save to database
+            expense = DatabaseService.save_expense(user.id, expense_data)
+            
+            # Get monthly total
+            monthly_total = DatabaseService.get_monthly_total(user.id, month_year)
+            
+            # Send success message
+            entry_type = "Manual Entry" if is_manual_entry else "Receipt"
+            success_message = f"""✅ {entry_type} Saved Successfully!
+
+**This Purchase:**
+🏪 {expense_data['merchant']}
+💰 ₺{expense_data['amount_tl']:.2f} → {expense_data['amount_mwk']:.2f} MWK
+📊 Rate: {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
+📅 Date: {expense_data['expense_date']}
+
+**Monthly Summary ({expense_data['month_year']}):**
+💵 {monthly_total['mwk_total']:.2f} MWK total
+₺ {monthly_total['tl_total']:.2f} TL total
+🧾 {monthly_total['transaction_count']} transactions
+
+Use "total" command to see current month anytime."""
+
+            self.whatsapp.send_message(from_number, success_message)
+            
+            # Clear pending data
+            if from_number in self.pending_receipts:
+                del self.pending_receipts[from_number]
+            if from_number in self.pending_manual_entries:
+                del self.pending_manual_entries[from_number]
+            if from_number in self.manual_entry_states:
+                del self.manual_entry_states[from_number]
+            
+            logger.info(f"{'Manual entry' if is_manual_entry else 'Receipt'} saved successfully for {from_number}")
+            
+        except Exception as e:
+            logger.error(f"Error handling rate selection: {e}")
+            self.whatsapp.send_message(
+                from_number,
+                f"❌ Error saving transaction: {str(e)}"
+            )
     
     def send_welcome_message(self, to_number):
         """Send welcome message"""
@@ -100,6 +309,7 @@ This bot processes your Turkish receipts and tracks your monthly expenses in MWK
 
 **Commands:**
 - "total" - Current month total
+- "manual" - Add expense without receipt
 - "help" - Show help
 
 Let's get started! 🚀"""
@@ -116,8 +326,15 @@ Let's get started! 🚀"""
 3. Review the extracted information
 4. Choose rate type (POS/ATM)
 
+**Manual Entry (No Receipt):**
+1. Send "manual" command
+2. Enter amount in Turkish Lira (e.g., "45.50")
+3. Enter merchant name (e.g., "Migros")
+4. Choose rate type (POS/ATM)
+
 **Commands:**
 - "total" or "summary" - Monthly total
+- "manual" - Add expense without receipt
 - "hello" or "hi" - Welcome message
 
 **Having issues?** Make sure your receipt photo is clear and straight."""
@@ -126,16 +343,193 @@ Let's get started! 🚀"""
     
     def send_monthly_total(self, to_number, user_id):
         """Send current month total"""
-        from datetime import datetime
-        
-        current_month = datetime.now().strftime('%Y-%m')
-        totals = DatabaseService.get_monthly_total(user_id, current_month)
-        
-        message = f"""📊 **This Month's Total**
+        try:
+            current_month = datetime.now().strftime('%Y-%m')
+            totals = DatabaseService.get_monthly_total(user_id, current_month)
+            
+            if totals['transaction_count'] == 0:
+                message = f"""📊 **This Month's Total**
+
+No transactions yet this month.
+
+Send a receipt image to get started! 📸"""
+            else:
+                message = f"""📊 **This Month's Total**
 
 💰 **₺{totals['tl_total']:.2f}** → **{totals['mwk_total']:.2f} MWK**
 🧾 **{totals['transaction_count']} transactions**
 
 _Monthly summary is sent automatically on the 1st of each month._"""
 
-        self.whatsapp.send_message(to_number, message)
+            self.whatsapp.send_message(to_number, message)
+            
+        except Exception as e:
+            logger.error(f"Error sending monthly total: {e}")
+            self.whatsapp.send_message(
+                to_number,
+                "❌ Error retrieving monthly total. Please try again."
+            )
+    
+    def start_manual_entry(self, from_number):
+        """Start manual entry process"""
+        message = """📝 **Manual Entry Mode**
+
+I'll help you add an expense without a receipt.
+
+**Step 1:** Please send the total amount you spent in Turkish Lira.
+
+**Examples:**
+- 45.50
+- 120
+- 33.75
+
+Send just the number (with or without decimals)."""
+
+        # Initialize manual entry state
+        self.manual_entry_states[from_number] = {
+            'step': 'amount',
+            'awaiting_amount': True,
+            'awaiting_merchant': False,
+            'amount': None,
+            'merchant': None
+        }
+
+        self.whatsapp.send_message(from_number, message)
+        logger.info(f"Started manual entry for {from_number}")
+    
+    def is_amount_entry(self, text):
+        """Check if text is a valid amount entry"""
+        try:
+            # Remove common currency symbols and whitespace
+            cleaned_text = text.replace('₺', '').replace('tl', '').replace('lira', '').strip()
+            
+            # Try to parse as float
+            amount = float(cleaned_text)
+            
+            # Validate amount (between 0.01 and 10000 TL)
+            return 0.01 <= amount <= 10000.00
+            
+        except (ValueError, TypeError):
+            return False
+    
+    def handle_manual_amount(self, from_number, user, text):
+        """Handle manual amount entry"""
+        try:
+            # Check if user is in manual entry mode
+            if from_number not in self.manual_entry_states:
+                # Not in manual entry mode, send help
+                self.whatsapp.send_message(
+                    from_number,
+                    "To add a manual entry, please send 'manual' command first."
+                )
+                return
+            
+            # Extract amount
+            cleaned_text = text.replace('₺', '').replace('tl', '').replace('lira', '').strip()
+            amount = float(cleaned_text)
+            
+            # Update state
+            self.manual_entry_states[from_number].update({
+                'step': 'merchant',
+                'awaiting_amount': False,
+                'awaiting_merchant': True,
+                'amount': amount
+            })
+            
+            # Ask for merchant
+            merchant_message = f"""✅ **Amount Received: ₺{amount:.2f}**
+
+**Step 2:** Now please tell me where you spent this money.
+
+**Examples:**
+- Migros
+- Starbucks
+- Taxi
+- Restaurant
+- Pharmacy
+- Gas Station
+
+Just type the merchant/store name:"""
+
+            self.whatsapp.send_message(from_number, merchant_message)
+            logger.info(f"Amount processed for {from_number}: ₺{amount}, awaiting merchant")
+            
+        except Exception as e:
+            logger.error(f"Error handling manual amount: {e}")
+            self.whatsapp.send_message(
+                from_number,
+                "❌ Invalid amount format. Please send a valid number (e.g., 45.50)"
+            )
+    
+    def handle_manual_merchant(self, from_number, user, merchant_text):
+        """Handle manual merchant entry"""
+        try:
+            if from_number not in self.manual_entry_states:
+                return
+            
+            state = self.manual_entry_states[from_number]
+            amount = state['amount']
+            
+            # Clean merchant name
+            merchant_name = merchant_text.strip().title()
+            
+            # Validate merchant name (basic validation)
+            if len(merchant_name) < 2 or len(merchant_name) > 50:
+                self.whatsapp.send_message(
+                    from_number,
+                    "❌ Please enter a valid merchant name (2-50 characters)"
+                )
+                return
+            
+            # Create manual entry data
+            manual_data = {
+                'merchant_name': merchant_name,
+                'total_amount': amount,
+                'date': datetime.now().strftime('%Y-%m-%d'),
+                'items': [],
+                'confidence': 'manual',
+                'receipt_number': None,
+                'tax_amount': 0
+            }
+            
+            # Store pending manual entry
+            self.pending_manual_entries[from_number] = manual_data
+            
+            # Create rate selection message
+            rate_selection = self.exchange_rate_service.create_rate_selection_message(manual_data) # type: ignore
+            
+            # Send confirmation and rate selection
+            confirmation_message = f"""✅ **Manual Entry Complete**
+
+🏪 **Merchant:** {merchant_name}
+💰 **Amount:** ₺{amount:.2f}
+📅 **Date:** {manual_data['date']}
+
+**Step 3:** Choose your payment method:
+
+🏪 **POS Rate:** ₺{amount:.2f} → {(amount * self.exchange_rate_service.pos_rate):.2f} MWK  
+🏧 **ATM Rate:** ₺{amount:.2f} → {(amount * self.exchange_rate_service.atm_rate):.2f} MWK""" # type: ignore
+
+            self.whatsapp.send_message(from_number, confirmation_message)
+            
+            # Send rate selection buttons
+            self.whatsapp.send_interactive_message(
+                from_number,
+                "Choose your payment method:",
+                [
+                    {"id": "pos_rate", "title": "🏪 POS Rate"},
+                    {"id": "atm_rate", "title": "🏧 ATM Rate"}
+                ]
+            )
+            
+            # Clear manual entry state (keep only pending_manual_entries for rate selection)
+            del self.manual_entry_states[from_number]
+            
+            logger.info(f"Manual entry ready for rate selection: {merchant_name} - ₺{amount}")
+            
+        except Exception as e:
+            logger.error(f"Error handling manual merchant: {e}")
+            self.whatsapp.send_message(
+                from_number,
+                "❌ Error processing merchant name. Please try again."
+            )

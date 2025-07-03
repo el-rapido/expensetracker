@@ -36,7 +36,7 @@ class OCRService:
             )
             
             # Perform text detection
-            response = self.client.text_detection(
+            response = self.client.text_detection( # type: ignore
                 image=image,
                 image_context=image_context
             )

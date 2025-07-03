@@ -94,7 +94,7 @@ Return only valid JSON, no other text or explanation.
             
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing failed: {e}")
-            logger.error(f"Raw response: {response.text}")
+            logger.error(f"Raw response: {response.text}") # type: ignore
             return {
                 "success": False,
                 "error": f"Invalid JSON response: {str(e)}",

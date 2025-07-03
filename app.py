@@ -16,6 +16,7 @@ import logging
 from services.ocr_service import OCRService
 from dotenv import load_dotenv
 import os
+import json
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -81,15 +82,19 @@ def create_app():
         logger.warning("WhatsApp credentials not found - running without WhatsApp integration")
         whatsapp_service = None
 
-    # Set message_handler to None for now since we don't need it yet
-    message_handler = None
-        
+    # Initialize message handler
     if whatsapp_service:
-        message_handler = MessageHandler(whatsapp_service)
+        message_handler = MessageHandler(
+            whatsapp_service,
+            ocr_service,
+            llm_service,
+            exchange_rate_service,
+            monthly_tracking
+        )
         logger.info("Message handler initialized")
     else:
         message_handler = None
-
+        
     with app.app_context():
         db.create_all()
         logger.info("Database tables created")
@@ -485,8 +490,8 @@ ${data.message}
 </body>
 </html>'''
     
-    #Webhook for WhatsApp Integration
-    @app.route('/webhook', methods=['GET', 'POST'])
+    # UPDATED WEBHOOK ROUTE WITH FULL MESSAGE PROCESSING
+    @app.route('/webhook', methods=['GET', 'POST']) # type: ignore
     def whatsapp_webhook():
         if request.method == 'GET':
             # Meta sends these specific parameters
@@ -509,9 +514,28 @@ ${data.message}
                 return 'Verification failed', 403
         
         elif request.method == 'POST':
-            data = request.get_json()
-            logger.info(f"Received webhook: {data}")
-            return jsonify({"status": "ok"}), 200
+            # Message processing
+            try:
+                data = request.get_json()
+                logger.info(f"Received webhook data: {json.dumps(data, indent=2)}")
+                
+                # Check if we have message handler
+                if not message_handler:
+                    logger.warning("Message handler not available")
+                    return jsonify({"status": "ok", "message": "Handler not available"}), 200
+                
+                # Process the incoming message
+                message_handler.handle_incoming_message(data)
+                
+                return jsonify({"status": "ok", "message": "Processed"}), 200
+                
+            except Exception as e:
+                logger.error(f"Webhook processing failed: {e}")
+                if 'data' in locals():
+                    logger.error(f"Webhook data: {json.dumps(data, indent=2)}") # type: ignore
+                else:
+                    logger.error("No webhook data available")
+                return jsonify({"status": "error", "message": str(e)}), 500
     
     # Process receipt 
     @app.route('/process-receipt', methods=['POST'])
@@ -573,22 +597,38 @@ ${data.message}
             }), 500
 
     # Test WhatsApp message sending
-    @app.route('/test-message/<phone_number>')
-    def test_message(phone_number):
+    @app.route('/test-whatsapp-text/<phone_number>')
+    def test_whatsapp_text(phone_number):
+        """Test text message sending"""
         if not whatsapp_service:
-            return jsonify({
-                "status": "error", 
-                "message": "WhatsApp service not available. Please configure credentials."
-            }), 500
-            
-        try:
-            result = whatsapp_service.send_message(
-                phone_number,
-                "🤖 Test message! Bot is working! ✅"
-            )
-            return jsonify({"status": "sent", "result": result})
-        except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 500
+            return jsonify({"error": "WhatsApp service not available"}), 500
+        
+        result = whatsapp_service.send_message(
+            phone_number,
+            "🤖 Test text message from Receipt Bot! This should work now! ✅"
+        )
+        
+        return jsonify({
+            "status": "success" if result else "failed",
+            "result": result
+        })
+
+    @app.route('/test-whatsapp-template/<phone_number>')
+    def test_whatsapp_template(phone_number):
+        """Test template message sending"""
+        if not whatsapp_service:
+            return jsonify({"error": "WhatsApp service not available"}), 500
+        
+        result = whatsapp_service.send_template_message(
+            phone_number,
+            "hello_world",
+            "en_US"
+        )
+        
+        return jsonify({
+            "status": "success" if result else "failed", 
+            "result": result
+        })
     
     # Health check
     @app.route('/health')
@@ -675,40 +715,7 @@ ${data.message}
                 "status": "error", 
                 "message": f"Expense test failed: {str(e)}"
             }), 500
-# Add these routes to your app.py
-
-    @app.route('/test-whatsapp-text/<phone_number>')
-    def test_whatsapp_text(phone_number):
-        """Test text message sending"""
-        if not whatsapp_service:
-            return jsonify({"error": "WhatsApp service not available"}), 500
-        
-        result = whatsapp_service.send_message(
-            phone_number,
-            "🤖 Test text message from Dr Budget Bot! This should work now! ✅"
-        )
-        
-        return jsonify({
-            "status": "success" if result else "failed",
-            "result": result
-        })
-
-    @app.route('/test-whatsapp-template/<phone_number>')
-    def test_whatsapp_template(phone_number):
-        """Test template message sending"""
-        if not whatsapp_service:
-            return jsonify({"error": "WhatsApp service not available"}), 500
-        
-        result = whatsapp_service.send_template_message(
-            phone_number,
-            "hello_world",
-            "en_US"
-        )
-        
-        return jsonify({
-            "status": "success" if result else "failed", 
-            "result": result
-        })
+    
     # View all expenses (for debugging)
     @app.route('/expenses')
     def view_expenses():
@@ -740,6 +747,8 @@ ${data.message}
             }), 500
     
     return app
+
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True, port=5000)
+    # Disable debug mode to prevent Facebook account issues
+    app.run(debug=False, port=5000)
