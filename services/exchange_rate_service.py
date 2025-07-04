@@ -49,20 +49,20 @@ class ExchangeRateService:
         pos_conversion = self.calculate_conversion(tl_amount, 'POS')
         atm_conversion = self.calculate_conversion(tl_amount, 'ATM')
         
-        message = f"""💱 **Choose Exchange Rate**
+        message = f"""💱 *Choose Exchange Rate*
 
-**Receipt:** {receipt_data.get('merchant_name', 'Unknown')}
-**Amount:** ₺{tl_amount:.2f}
+*Receipt:* {receipt_data.get('merchant_name', 'Unknown')}
+*Amount:* ₺{tl_amount:.2f}
 
-**Rate Options:**
+*Rate Options:*
 
-🏪 **POS Rate** (1 TL = {self.pos_rate} MWK)
-   → **{pos_conversion['mwk_amount']:.2f} MWK**
+🏪 *POS Rate* (1 TL = {self.pos_rate} MWK)
+   → *{pos_conversion['mwk_amount']:.2f} MWK*
 
-🏧 **ATM Rate** (1 TL = {self.atm_rate} MWK)  
-   → **{atm_conversion['mwk_amount']:.2f} MWK**
+🏧 *ATM Rate* (1 TL = {self.atm_rate} MWK)  
+   → *{atm_conversion['mwk_amount']:.2f} MWK*
 
-**Which rate applies to this purchase?**"""
+*Which rate applies to this purchase?*"""
 
         return {
             "message": message,

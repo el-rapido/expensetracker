@@ -70,18 +70,18 @@ class ReceiptWorkflow:
     def create_success_message(self, expense_data, monthly_total, original_data):
         """Create success confirmation message"""
         
-        message = f"""✅ **Receipt Saved Successfully!**
+        message = f"""✅ *Receipt Saved Successfully!*
 
-**This Purchase:**
-🏪 **{expense_data['merchant']}**
-💰 **₺{expense_data['amount_tl']:.2f}** → **{expense_data['amount_mwk']:.2f} MWK**
-📊 **Rate:** {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
-📅 **Date:** {expense_data['expense_date']}
+*This Purchase:*
+🏪 *{expense_data['merchant']}*
+💰 *₺{expense_data['amount_tl']:.2f}* → *{expense_data['amount_mwk']:.2f} MWK*
+📊 *Rate:* {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
+📅 *Date:* {expense_data['expense_date']}
 
-**Monthly Summary ({expense_data['month_year']}):**
-💵 **{monthly_total['mwk_total']:.2f} MWK** total
-₺ **{monthly_total['tl_total']:.2f} TL** total
-🧾 **{monthly_total['transaction_count']} transactions**
+*Monthly Summary ({expense_data['month_year']}):*
+💵 *{monthly_total['mwk_total']:.2f} MWK* total
+₺ *{monthly_total['tl_total']:.2f} TL* total
+🧾 *{monthly_total['transaction_count']} transactions*
 
 _Use "total" command to see current month anytime._"""
 

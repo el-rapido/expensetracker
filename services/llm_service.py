@@ -169,7 +169,7 @@ Return only valid JSON, no other text or explanation.
         items_summary = ""
         if data.get('items') and len(data['items']) > 0:
             items_count = len(data['items'])
-            items_summary = f"\n🛍️ **Items:** {items_count} items"
+            items_summary = f"\n🛍️ *Items:* {items_count} items"
             
             # Show first few items
             if items_count <= 3:
@@ -181,18 +181,18 @@ Return only valid JSON, no other text or explanation.
                 items_summary += f"\n   • ... and {items_count - 2} more items"
         
         message = f"""
-{confidence_emoji.get(data.get('confidence', 'low'), '❓')} **Receipt Information**
+{confidence_emoji.get(data.get('confidence', 'low'), '❓')} *Receipt Information*
 
-🏪 **Merchant:** {data.get('merchant_name', 'Unknown')}
-💰 **Total:** ₺{data.get('total_amount', 0):.2f}
-📅 **Date:** {data.get('date', 'Unknown')}
+🏪 *Merchant:* {data.get('merchant_name', 'Unknown')}
+💰 *Total:* ₺{data.get('total_amount', 0):.2f}
+📅 *Date:* {data.get('date', 'Unknown')}
 {items_summary}
 
-**Confidence:** {data.get('confidence', 'low').title()}
+*Confidence:* {data.get('confidence', 'low').title()}
 
 {data.get('extraction_notes', '')}
 
-**Is this information correct?**
+*Is this information correct?*
         """
         
         return message.strip()
