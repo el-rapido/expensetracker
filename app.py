@@ -41,7 +41,7 @@ def create_app():
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     db.init_app(app)
     
-    #Initialize OCR Service
+    # Initialize OCR Service
     ocr_service = OCRService()
     llm_service = LLMService(app.config.get('GEMINI_API_KEY'))
     exchange_rate_service = ExchangeRateService(app.config['POS_RATE'], app.config['ATM_RATE'])
@@ -54,11 +54,6 @@ def create_app():
         aws_region=app.config.get('AWS_REGION', 'us-east-1')
     )
     
-    
-    # Initialize scheduler
-    scheduler = SchedulerService(monthly_tracking) # type: ignore
-    scheduler.setup_monthly_summaries()  # Set up automatic monthly summaries
-
     # Initialize WhatsApp service with direct environment access
     whatsapp_access_token = os.getenv('WHATSAPP_ACCESS_TOKEN')
     whatsapp_phone_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
@@ -80,7 +75,12 @@ def create_app():
         logger.warning("WhatsApp credentials not found - running without WhatsApp integration")
         whatsapp_service = None
 
+    # Initialize monthly tracking with BOTH services (MOVED BEFORE SCHEDULER)
     monthly_tracking = MonthlyTrackingService(sms_service, whatsapp_service)
+    
+    # Initialize scheduler AFTER monthly_tracking is created
+    scheduler = SchedulerService(monthly_tracking)
+    scheduler.setup_monthly_summaries()  # Set up automatic monthly summaries
 
     # Initialize message handler
     if whatsapp_service:
