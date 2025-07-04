@@ -1110,15 +1110,20 @@ ${data.message}
             expense_list = []
             
             for expense in expenses:
-                expense_list.append({
+                expense_data = {
                     "id": expense.id,
                     "merchant": expense.merchant,
                     "amount_tl": expense.amount_tl,
                     "amount_mwk": expense.amount_mwk,
                     "rate_type": expense.rate_type,
                     "expense_date": expense.expense_date.isoformat() if expense.expense_date else None,
-                    "created_at": expense.created_at.isoformat()
-                })
+                    "created_at": expense.created_at.isoformat(),
+                    # ADD THESE LINES:
+                    "items_json": expense.items_json,  # Raw JSON
+                    "items": expense.get_items(),      # Parsed items
+                    "items_count": len(expense.get_items()) if expense.items_json else 0
+                }
+                expense_list.append(expense_data)
             
             return jsonify({
                 "status": "success",
@@ -1131,7 +1136,7 @@ ${data.message}
                 "status": "error",
                 "message": str(e)
             }), 500
-    
+        
     return app
 
 app = create_app()
