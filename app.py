@@ -278,7 +278,6 @@ Use "total" command to see current month anytime."""
             }), 500
 
     # New routes for monthly features
-    @app.route('/monthly-summary/<user_id>')
     @app.route('/monthly-summary/<user_id>/<month_year>')
     def get_monthly_summary(user_id, month_year=None):
         """Get monthly summary for user"""
@@ -320,6 +319,162 @@ Use "total" command to see current month anytime."""
                 "error": str(e)
             }), 500
     
+# Add these routes to your app.py for SMS testing
+
+    @app.route('/test-monthly-sms/<phone_number>')
+    def test_monthly_sms(phone_number):
+        """Test monthly SMS for a specific user"""
+        try:
+            # Get or create user
+            user = DatabaseService.get_or_create_user(phone_number)
+            
+            # Set phone number if not set
+            if not user.phone_number:
+                user.phone_number = phone_number
+                db.session.commit()
+            
+            # Get current month summary
+            current_month = datetime.now().strftime('%Y-%m')
+            summary = monthly_tracking.get_enhanced_monthly_summary(user.id, current_month)
+            
+            if summary['transaction_count'] == 0:
+                return jsonify({
+                    "status": "no_data",
+                    "message": "No transactions found for current month",
+                    "user_id": user.id,
+                    "month": current_month
+                })
+            
+            # Send SMS
+            result = sms_service.send_monthly_summary(phone_number, summary)
+            
+            return jsonify({
+                "status": "success",
+                "sms_result": result,
+                "summary_data": summary,
+                "phone_number": phone_number
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            }), 500
+
+    @app.route('/test-previous-month-sms/<phone_number>')
+    def test_previous_month_sms(phone_number):
+        """Test SMS for previous month (what the scheduler would send)"""
+        try:
+            # Get or create user
+            user = DatabaseService.get_or_create_user(phone_number)
+            
+            # Set phone number if not set
+            if not user.phone_number:
+                user.phone_number = phone_number
+                db.session.commit()
+            
+            # Get previous month (what the scheduler looks for)
+            from datetime import date
+            today = date.today()
+            if today.month == 1:
+                prev_month = 12
+                prev_year = today.year - 1
+            else:
+                prev_month = today.month - 1
+                prev_year = today.year
+            
+            prev_month_year = f"{prev_year}-{prev_month:02d}"
+            
+            # Get summary for previous month
+            summary = monthly_tracking.get_enhanced_monthly_summary(user.id, prev_month_year)
+            
+            if summary['transaction_count'] == 0:
+                return jsonify({
+                    "status": "no_data",
+                    "message": f"No transactions found for {prev_month_year}",
+                    "user_id": user.id,
+                    "month": prev_month_year
+                })
+            
+            # Send SMS
+            result = sms_service.send_monthly_summary(phone_number, summary)
+            
+            return jsonify({
+                "status": "success",
+                "sms_result": result,
+                "summary_data": summary,
+                "phone_number": phone_number,
+                "month_tested": prev_month_year
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            }), 500
+
+    @app.route('/debug-sms-service')
+    def debug_sms_service():
+        """Debug SMS service configuration"""
+        try:
+            debug_info = {
+                "sms_service_available": sms_service.is_available(),
+                "aws_region": os.getenv('AWS_REGION'),
+                "aws_access_key_set": bool(os.getenv('AWS_ACCESS_KEY_ID')),
+                "aws_secret_key_set": bool(os.getenv('AWS_SECRET_ACCESS_KEY')),
+                "sender_id": os.getenv('AWS_SNS_SENDER_ID', 'RAPIDODEV1')
+            }
+            
+            # Try to list SNS topics to test connection
+            if sms_service.sns_client:
+                try:
+                    topics = sms_service.sns_client.list_topics()
+                    debug_info["sns_connection"] = "success"
+                    debug_info["topics_count"] = len(topics.get('Topics', []))
+                except Exception as e:
+                    debug_info["sns_connection"] = f"failed: {str(e)}"
+            else:
+                debug_info["sns_connection"] = "no_client"
+            
+            return jsonify(debug_info)
+            
+        except Exception as e:
+            return jsonify({
+                "error": str(e)
+            }), 500
+
+    @app.route('/test-sms-format')
+    def test_sms_format():
+        """Test SMS message formatting without sending"""
+        try:
+            # Create sample summary data
+            sample_summary = {
+                'month_year': '2025-06',
+                'tl_total': 250.75,
+                'mwk_total': 12787.25,
+                'transaction_count': 3,
+                'top_merchant': 'Migros',
+                'average_transaction': 4262.42
+            }
+            
+            # Format the SMS
+            formatted_message = sms_service.format_monthly_sms(sample_summary)
+            
+            return jsonify({
+                "status": "success",
+                "sample_data": sample_summary,
+                "formatted_message": formatted_message,
+                "message_length": len(formatted_message)
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            }), 500
+
+
+
     @app.route('/trigger-monthly-summaries')
     def trigger_monthly_summaries():
         """Manually trigger monthly summaries (for testing)"""
