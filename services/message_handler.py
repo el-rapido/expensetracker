@@ -119,14 +119,14 @@ class MessageHandler:
             if not months_with_expenses:
                 self.whatsapp.send_message(
                     to_number,
-                    "📊 **No Expenses Found**\n\nYou haven't recorded any expenses yet!\n\nSend a receipt image or use 'manual' to add an expense."
+                    "📊 *No Expenses Found*\n\nYou haven't recorded any expenses yet!\n\nSend a receipt image or use 'manual' to add an expense."
                 )
                 return
             
             # Create month list message
             available_months = [month[0] for month in months_with_expenses]
             
-            message = "📊 **Choose Month to View**\n\nSelect which month you'd like to see:"
+            message = "📊 *Choose Month to View*\n\nSelect which month you'd like to see:"
             
             # Create buttons for months + all time
             buttons = []
@@ -148,7 +148,7 @@ class MessageHandler:
             # If there are more than 2 months, mention them in the message
             if len(available_months) > 2:
                 other_months = available_months[2:]
-                message += f"\n\n**Other available months:**"
+                message += f"\n\n*Other available months:*"
                 for month_year in other_months:
                     month_name = self.format_month_name(month_year)
                     message += f"\n• {month_name}"
@@ -207,7 +207,7 @@ class MessageHandler:
             month_name = self.format_month_name(month_year)
             
             if totals['transaction_count'] == 0:
-                message = f"""📊 **{month_name}**
+                message = f"""📊 *{month_name}*
 
 No transactions found for {month_name}.
 
@@ -219,12 +219,12 @@ Use 'total' to see available months."""
                     Expense.month_year == month_year
                 ).order_by(Expense.expense_date.desc()).all()
                 
-                message = f"""📊 **{month_name}**
+                message = f"""📊 *{month_name}*
 
-💰 **₺{totals['tl_total']:.2f}** → **{totals['mwk_total']:.2f} MWK**
-🧾 **{totals['transaction_count']} transactions**
+💰 *₺{totals['tl_total']:.2f}* → *{totals['mwk_total']:.2f} MWK*
+🧾 *{totals['transaction_count']} transactions*
 
-**Recent transactions:**"""
+*Recent transactions:*"""
                 
                 # Show up to 5 most recent transactions
                 for expense in expenses[:5]:
@@ -251,7 +251,7 @@ Use 'total' to see available months."""
             ).all()
             
             if not all_expenses:
-                message = """📊 **All-Time Total**
+                message = """📊 *All-Time Total*
 
 No transactions found.
 
@@ -264,13 +264,13 @@ Send a receipt image or use 'manual' to add your first expense!"""
                 oldest = min(e.expense_date for e in all_expenses if e.expense_date)
                 newest = max(e.expense_date for e in all_expenses if e.expense_date)
                 
-                message = f"""📊 **All-Time Total**
+                message = f"""📊 *All-Time Total*
 
-💰 **₺{total_tl:.2f}** → **{total_mwk:.2f} MWK**
-🧾 **{len(all_expenses)} transactions**
-📅 **{oldest.strftime('%b %Y')} - {newest.strftime('%b %Y')}**
+💰 *₺{total_tl:.2f}* → *{total_mwk:.2f} MWK*
+🧾 *{len(all_expenses)} transactions*
+📅 *{oldest.strftime('%b %Y')} - {newest.strftime('%b %Y')}*
 
-**Recent transactions:**"""
+*Recent transactions:*"""
                 
                 # Show 5 most recent
                 for expense in all_expenses[:5]:
@@ -436,13 +436,13 @@ Send a receipt image or use 'manual' to add your first expense!"""
             entry_type = "Manual Entry" if is_manual_entry else "Receipt"
             success_message = f"""✅ {entry_type} Saved Successfully!
 
-**This Purchase:**
+*This Purchase:*
 🏪 {expense_data['merchant']}
 💰 ₺{expense_data['amount_tl']:.2f} → {expense_data['amount_mwk']:.2f} MWK
 📊 Rate: {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
 📅 Date: {expense_data['expense_date']}
 
-**Monthly Summary ({expense_data['month_year']}):**
+*Monthly Summary ({expense_data['month_year']}):*
 💵 {monthly_total['mwk_total']:.2f} MWK total
 ₺ {monthly_total['tl_total']:.2f} TL total
 🧾 {monthly_total['transaction_count']} transactions
@@ -470,17 +470,17 @@ Use "total" command to see current month anytime."""
     
     def send_welcome_message(self, to_number):
         """Send welcome message"""
-        message = """🤖 **Welcome to Dr Budget!**
+        message = """🤖 *Welcome to Dr Budget!*
 
 This bot processes your Turkish receipts and tracks your monthly expenses in MWK.
 
-**How to use:**
+*How to use:*
 📸 Send a photo of your receipt
 ✅ Confirm the extracted information  
 💱 Choose rate type (POS/ATM)
 📊 View your monthly total
 
-**Commands:**
+*Commands:*
 - "total" - Choose month or view all-time
 - "manual" - Add expense without receipt
 - "help" - Show help
@@ -491,40 +491,40 @@ Let's get started! 🚀"""
     
     def send_help_message(self, to_number):
         """Send help message"""
-        message = """📋 **Help**
+        message = """📋 *Help*
 
-**Sending Receipts:**
+*Sending Receipts:*
 1. Take a clear photo of your receipt
 2. Send it to this bot via WhatsApp
 3. Review the extracted information
 4. Choose rate type (POS/ATM)
 
-**Manual Entry (No Receipt):**
+*Manual Entry (No Receipt):*
 1. Send "manual" command
 2. Enter amount in Turkish Lira (e.g., "45.50")
 3. Enter merchant name (e.g., "Migros")
 4. Choose rate type (POS/ATM)
 
-**View Expenses:**
+*View Expenses:*
 - "total" - Choose month or view all-time
 
-**Commands:**
+*Commands:*
 - "manual" - Add expense without receipt
 - "hello" or "hi" - Welcome message
 
-**Having issues?** Make sure your receipt photo is clear and straight."""
+*Having issues?* Make sure your receipt photo is clear and straight."""
 
         self.whatsapp.send_message(to_number, message)
         
     def start_manual_entry(self, from_number):
         """Start manual entry process"""
-        message = """📝 **Manual Entry Mode**
+        message = """📝 *Manual Entry Mode*
 
 I'll help you add an expense without a receipt.
 
-**Step 1:** Please send the total amount you spent in Turkish Lira.
+*Step 1:* Please send the total amount you spent in Turkish Lira.
 
-**Examples:**
+*Examples:*
 - 45.50
 - 120
 - 33.75
@@ -583,11 +583,11 @@ Send just the number (with or without decimals)."""
             })
             
             # Ask for merchant
-            merchant_message = f"""✅ **Amount Received: ₺{amount:.2f}**
+            merchant_message = f"""✅ *Amount Received: ₺{amount:.2f}*
 
-**Step 2:** Now please tell me where you spent this money.
+*Step 2:* Now please tell me where you spent this money.
 
-**Examples:**
+*Examples:*
 - Migros
 - Starbucks
 - Taxi
@@ -648,16 +648,16 @@ Just type the merchant/store name:"""
             pos_amount = amount * self.exchange_rate_service.pos_rate if self.exchange_rate_service else 0
             atm_amount = amount * self.exchange_rate_service.atm_rate if self.exchange_rate_service else 0
             
-            confirmation_message = f"""✅ **Manual Entry Complete**
+            confirmation_message = f"""✅ *Manual Entry Complete*
 
-🏪 **Merchant:** {merchant_name}
-💰 **Amount:** ₺{amount:.2f}
-📅 **Date:** {manual_data['date']}
+🏪 *Merchant:* {merchant_name}
+💰 *Amount:* ₺{amount:.2f}
+📅 *Date:* {manual_data['date']}
 
-**Step 3:** Choose your payment method:
+*Step 3:* Choose your payment method:
 
-🏪 **POS Rate:** ₺{amount:.2f} → {pos_amount:.2f} MWK
-🏧 **ATM Rate:** ₺{amount:.2f} → {atm_amount:.2f} MWK"""
+🏪 *POS Rate:* ₺{amount:.2f} → {pos_amount:.2f} MWK
+🏧 *ATM Rate:* ₺{amount:.2f} → {atm_amount:.2f} MWK"""
 
             self.whatsapp.send_message(from_number, confirmation_message)
             
