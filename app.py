@@ -319,7 +319,58 @@ Use "total" command to see current month anytime."""
                 "error": str(e)
             }), 500
     
-# Add these routes to your app.py for SMS testing
+#for SMS testing
+
+
+    @app.route('/test-sms-formats/<base_number>')
+    def test_sms_formats(base_number):
+        """Test different phone number formats for SMS"""
+        try:
+            # Different formats to try for Malawi numbers
+            formats_to_test = [
+                f"+{base_number}",                    # +265991304876
+                f"+265{base_number[3:]}",            # +265991304876 (ensure country code)
+                base_number,                         # 265991304876 (no +)
+                f"00{base_number}",                  # 00265991304876
+            ]
+            
+            results = []
+            
+            for phone_format in formats_to_test:
+                try:
+                    result = sms_service.send_test_sms(
+                        phone_format, 
+                        f"Format test: {phone_format} - Dr Budget Bot"
+                    )
+                    results.append({
+                        "format": phone_format,
+                        "result": result,
+                        "success": result.get('success', False)
+                    })
+                    
+                    # Wait between sends to avoid rate limiting
+                    import time
+                    time.sleep(2)
+                    
+                except Exception as e:
+                    results.append({
+                        "format": phone_format,
+                        "error": str(e),
+                        "success": False
+                    })
+            
+            return jsonify({
+                "status": "completed",
+                "base_number": base_number,
+                "formats_tested": len(formats_to_test),
+                "results": results
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            })
 
     @app.route('/test-monthly-sms/<phone_number>')
     def test_monthly_sms(phone_number):
