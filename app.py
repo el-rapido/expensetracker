@@ -244,13 +244,13 @@ def create_app():
             # Step 6: Create success message
             success_message = f"""✅ Receipt Saved Successfully!
 
-**This Purchase:**
+*This Purchase:*
 🏪 {expense_data['merchant']}
 💰 ₺{expense_data['amount_tl']:.2f} → {expense_data['amount_mwk']:.2f} MWK
 📊 Rate: {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
 📅 Date: {expense_data['expense_date']}
 
-**Monthly Summary ({expense_data['month_year']}):**
+*Monthly Summary ({expense_data['month_year']}):*
 💵 {monthly_total['mwk_total']:.2f} MWK total
 ₺ {monthly_total['tl_total']:.2f} TL total
 🧾 {monthly_total['transaction_count']} transactions
