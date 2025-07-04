@@ -54,11 +54,9 @@ def create_app():
         aws_region=app.config.get('AWS_REGION', 'us-east-1')
     )
     
-    # Initialize monthly tracking
-    monthly_tracking = MonthlyTrackingService(sms_service)
     
     # Initialize scheduler
-    scheduler = SchedulerService(monthly_tracking)
+    scheduler = SchedulerService(monthly_tracking) # type: ignore
     scheduler.setup_monthly_summaries()  # Set up automatic monthly summaries
 
     # Initialize WhatsApp service with direct environment access
@@ -81,6 +79,8 @@ def create_app():
     else:
         logger.warning("WhatsApp credentials not found - running without WhatsApp integration")
         whatsapp_service = None
+
+    monthly_tracking = MonthlyTrackingService(sms_service, whatsapp_service)
 
     # Initialize message handler
     if whatsapp_service:
@@ -306,7 +306,137 @@ Use "total" command to see current month anytime."""
                 "status": "error",
                 "message": str(e)
             }), 500
-    
+    # Add these test routes to your app.py
+
+    @app.route('/test-dual-delivery/<whatsapp_id>')
+    def test_dual_delivery(whatsapp_id):
+        """Test dual delivery (SMS + WhatsApp) for a user"""
+        try:
+            # Get or create user
+            user = DatabaseService.get_or_create_user(whatsapp_id)
+            
+            # Set phone number if not set (for SMS)
+            if not user.phone_number:
+                # Extract phone number from WhatsApp ID if it looks like a phone number
+                if whatsapp_id.isdigit():
+                    user.phone_number = f"+{whatsapp_id}"
+                    db.session.commit()
+            
+            # Get current month summary
+            current_month = datetime.now().strftime('%Y-%m')
+            summary = monthly_tracking.get_enhanced_monthly_summary(user.id, current_month)
+            
+            if summary['transaction_count'] == 0:
+                return jsonify({
+                    "status": "no_data",
+                    "message": "No transactions found for current month",
+                    "user_id": user.id,
+                    "month": current_month
+                })
+            
+            # Test dual delivery
+            delivery_result = monthly_tracking.send_dual_delivery(user, summary)
+            
+            return jsonify({
+                "status": "success",
+                "user_id": user.id,
+                "whatsapp_id": user.whatsapp_id,
+                "phone_number": user.phone_number,
+                "delivery_result": delivery_result,
+                "summary_data": summary
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            }), 500
+
+    @app.route('/test-whatsapp-monthly/<whatsapp_id>')
+    def test_whatsapp_monthly(whatsapp_id):
+        """Test WhatsApp monthly summary only"""
+        try:
+            user = DatabaseService.get_or_create_user(whatsapp_id)
+            current_month = datetime.now().strftime('%Y-%m')
+            summary = monthly_tracking.get_enhanced_monthly_summary(user.id, current_month)
+            
+            if summary['transaction_count'] == 0:
+                return jsonify({
+                    "status": "no_data",
+                    "message": "No transactions found for current month"
+                })
+            
+            # Format and send WhatsApp message
+            whatsapp_message = monthly_tracking.format_whatsapp_monthly_summary(summary)
+            
+            if whatsapp_service:
+                result = whatsapp_service.send_message(whatsapp_id, whatsapp_message)
+                
+                return jsonify({
+                    "status": "success",
+                    "whatsapp_result": result is not None,
+                    "message_preview": whatsapp_message[:100] + "...",
+                    "summary_data": summary
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "error": "WhatsApp service not available"
+                })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            }), 500
+
+    @app.route('/trigger-dual-delivery-summaries')
+    def trigger_dual_delivery_summaries():
+        """Manually trigger dual delivery monthly summaries"""
+        try:
+            result = monthly_tracking.send_monthly_summaries()
+            return jsonify({
+                "status": "success",
+                "result": result
+            })
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
+
+    @app.route('/delivery-stats')
+    def delivery_stats():
+        """Show delivery service status"""
+        try:
+            stats = {
+                "sms_service": {
+                    "available": sms_service.is_available(),
+                    "aws_configured": bool(os.getenv('AWS_ACCESS_KEY_ID'))
+                },
+                "whatsapp_service": {
+                    "available": whatsapp_service is not None,
+                    "credentials_configured": bool(os.getenv('WHATSAPP_ACCESS_TOKEN'))
+                },
+                "dual_delivery": {
+                    "enabled": sms_service.is_available() and whatsapp_service is not None,
+                    "fallback_available": sms_service.is_available() or whatsapp_service is not None
+                }
+            }
+            
+            return jsonify({
+                "status": "success",
+                "delivery_services": stats
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": str(e)
+            }), 500
+
+
+
     @app.route('/send-test-sms/<phone_number>')
     def send_test_sms(phone_number):
         """Send test SMS"""
