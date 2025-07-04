@@ -95,6 +95,8 @@ class MessageHandler:
             self.send_month_picker(from_number, user.id)
         elif text in ['manual', 'entry', 'add', 'lost receipt', 'no receipt']:
             self.start_manual_entry(from_number)
+        elif text in ['details', 'items', 'breakdown', 'list']:
+            self.send_recent_items_breakdown(from_number, user.id)
         elif text.upper() in ['POS', 'ATM']:
             self.handle_rate_selection(from_number, user, text.upper())
         elif self.is_amount_entry(text):
@@ -229,10 +231,14 @@ Use 'total' to see available months."""
                 # Show up to 5 most recent transactions
                 for expense in expenses[:5]:
                     date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
-                    message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}"
+                    items = expense.get_items()
+                    items_note = f" ({len(items)} items)" if items else ""
+                    message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}{items_note}"
                 
                 if len(expenses) > 5:
                     message += f"\n... and {len(expenses) - 5} more"
+                
+                message += f"\n\n💡 Send 'details' to see item breakdowns"
 
             self.whatsapp.send_message(to_number, message)
             
@@ -264,10 +270,14 @@ Send a receipt image or use 'manual' to add your first expense!"""
                 oldest = min(e.expense_date for e in all_expenses if e.expense_date)
                 newest = max(e.expense_date for e in all_expenses if e.expense_date)
                 
+                # Count total items
+                total_items = sum(len(e.get_items()) for e in all_expenses)
+                
                 message = f"""📊 *All-Time Total*
 
 💰 *₺{total_tl:.2f}* → *{total_mwk:.2f} MWK*
 🧾 *{len(all_expenses)} transactions*
+🛍️ *{total_items} items tracked*
 📅 *{oldest.strftime('%b %Y')} - {newest.strftime('%b %Y')}*
 
 *Recent transactions:*"""
@@ -275,10 +285,14 @@ Send a receipt image or use 'manual' to add your first expense!"""
                 # Show 5 most recent
                 for expense in all_expenses[:5]:
                     date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
-                    message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}"
+                    items = expense.get_items()
+                    items_note = f" ({len(items)} items)" if items else ""
+                    message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}{items_note}"
                 
                 if len(all_expenses) > 5:
                     message += f"\n... and {len(all_expenses) - 5} more"
+                
+                message += f"\n\n💡 Send 'details' to see item breakdowns"
 
             self.whatsapp.send_message(to_number, message)
             
@@ -287,6 +301,64 @@ Send a receipt image or use 'manual' to add your first expense!"""
             self.whatsapp.send_message(
                 to_number,
                 "❌ Error retrieving all-time data. Please try again."
+            )
+
+    def send_recent_items_breakdown(self, to_number, user_id):
+        """Show detailed breakdown of recent purchases with items"""
+        try:
+            # Get last 5 expenses that have items
+            recent_expenses = Expense.query.filter(
+                Expense.user_id == user_id,
+                Expense.items_json.isnot(None) # type: ignore
+            ).order_by(Expense.expense_date.desc()).limit(5).all()
+            
+            if not recent_expenses:
+                message = """📋 *Recent Items*
+
+No detailed item information available yet.
+
+💡 *Tip:* Send clearer receipt photos to capture individual item details!
+
+📸 Try taking photos of itemized receipts from:
+• Grocery stores (Migros, A101, etc.)
+• Restaurants with itemized bills
+• Shopping centers
+
+Send 'total' for expense summaries"""
+            else:
+                message = "📋 *Recent Purchases - Item Breakdown*\n"
+                
+                for i, expense in enumerate(recent_expenses, 1):
+                    items = expense.get_items()
+                    date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
+                    
+                    message += f"\n**{i}. {expense.merchant}** ({date_str})"
+                    message += f"\n💰 Total: ₺{expense.amount_tl:.2f} → {expense.amount_mwk:.2f} MWK"
+                    
+                    if items and len(items) > 0:
+                        message += f"\n🛍️ Items ({len(items)}):"
+                        for item in items:
+                            name = item.get('name', 'Unknown')
+                            price = item.get('price', 0)
+                            qty = item.get('quantity', 1)
+                            if qty > 1:
+                                message += f"\n   • {name} x{qty} - ₺{price:.2f}"
+                            else:
+                                message += f"\n   • {name} - ₺{price:.2f}"
+                    else:
+                        message += f"\n   📦 (No item details captured)"
+                    
+                    message += "\n"
+                
+                message += "\n💡 Send 'total' for monthly summaries"
+            
+            self.whatsapp.send_message(to_number, message)
+            
+        except Exception as e:
+            logger.error(f"Error sending items breakdown: {e}")
+            self.whatsapp.send_message(
+                to_number,
+                "❌ Error retrieving item details. Please try again."
             )
 
     def handle_image_message(self, message, from_number, user):
@@ -364,8 +436,22 @@ Send a receipt image or use 'manual' to add your first expense!"""
             # Store pending receipt
             self.pending_receipts[from_number] = extracted_data
             
+            # Enhanced rate selection message with items preview
+            items = extracted_data.get('items', [])
+            items_preview = ""
+            if items and len(items) > 0:
+                items_preview = f"\n\n🛍️ *Items detected ({len(items)}):*"
+                for item in items[:3]:  # Show first 3 items
+                    name = item.get('name', 'Unknown')
+                    price = item.get('price', 0)
+                    items_preview += f"\n   • {name} - ₺{price:.2f}"
+                if len(items) > 3:
+                    items_preview += f"\n   • ... and {len(items) - 3} more"
+            
+            enhanced_message = rate_selection['message'] + items_preview
+            
             # Send rate selection message
-            self.whatsapp.send_message(from_number, rate_selection['message'])
+            self.whatsapp.send_message(from_number, enhanced_message)
             
             # Send rate selection buttons
             self.whatsapp.send_interactive_message(
@@ -432,15 +518,33 @@ Send a receipt image or use 'manual' to add your first expense!"""
             # Get monthly total
             monthly_total = DatabaseService.get_monthly_total(user.id, month_year)
             
-            # Send success message
+            # Enhanced success message with items
             entry_type = "Manual Entry" if is_manual_entry else "Receipt"
+            
+            # Build items summary
+            items_summary = ""
+            items = extracted_data.get('items', [])
+            if items and len(items) > 0:
+                items_summary = f"\n\n🛍️ *Items Purchased ({len(items)}):*"
+                for item in items[:5]:  # Show max 5 items
+                    name = item.get('name', 'Unknown')
+                    price = item.get('price', 0)
+                    qty = item.get('quantity', 1)
+                    if qty > 1:
+                        items_summary += f"\n   • {name} x{qty} - ₺{price:.2f}"
+                    else:
+                        items_summary += f"\n   • {name} - ₺{price:.2f}"
+                
+                if len(items) > 5:
+                    items_summary += f"\n   • ... and {len(items) - 5} more items"
+            
             success_message = f"""✅ {entry_type} Saved Successfully!
 
 *This Purchase:*
 🏪 {expense_data['merchant']}
 💰 ₺{expense_data['amount_tl']:.2f} → {expense_data['amount_mwk']:.2f} MWK
 📊 Rate: {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
-📅 Date: {expense_data['expense_date']}
+📅 Date: {expense_data['expense_date']}{items_summary}
 
 *Monthly Summary ({expense_data['month_year']}):*
 💵 {monthly_total['mwk_total']:.2f} MWK total
@@ -482,6 +586,7 @@ This bot processes your Turkish receipts and tracks your monthly expenses in MWK
 
 *Commands:*
 - "total" - Choose month or view all-time
+- "details" - View recent purchase items
 - "manual" - Add expense without receipt
 - "help" - Show help
 
@@ -507,12 +612,16 @@ Let's get started! 🚀"""
 
 *View Expenses:*
 - "total" - Choose month or view all-time
+- "details" - See recent items breakdown
 
 *Commands:*
 - "manual" - Add expense without receipt
+- "details" - View recent purchase items
 - "hello" or "hi" - Welcome message
 
-*Having issues?* Make sure your receipt photo is clear and straight."""
+*Having issues?* Make sure your receipt photo is clear and straight.
+
+💡 *Pro tip:* Itemized receipts (like grocery stores) will show individual items in your purchase history!"""
 
         self.whatsapp.send_message(to_number, message)
         
@@ -627,12 +736,12 @@ Just type the merchant/store name:"""
                 )
                 return
             
-            # Create manual entry data
+            # Create manual entry data (no items for manual entries)
             manual_data = {
                 'merchant_name': merchant_name,
                 'total_amount': amount,
                 'date': datetime.now().strftime('%Y-%m-%d'),
-                'items': [],
+                'items': [],  # No items for manual entries
                 'confidence': 'manual',
                 'receipt_number': None,
                 'tax_amount': 0
@@ -642,9 +751,6 @@ Just type the merchant/store name:"""
             self.pending_manual_entries[from_number] = manual_data
             
             # Create rate selection message
-            rate_selection = self.exchange_rate_service.create_rate_selection_message(manual_data) # type: ignore
-            
-            # Send confirmation and rate selection
             pos_amount = amount * self.exchange_rate_service.pos_rate if self.exchange_rate_service else 0
             atm_amount = amount * self.exchange_rate_service.atm_rate if self.exchange_rate_service else 0
             
