@@ -78,26 +78,26 @@ class MonthlyTrackingService:
             return "📊 No transactions found for this month."
         
         # Format detailed report
-        report = f"""📊 **{month_year} Monthly Report**
+        report = f"""📊 *{month_year} Monthly Report*
 
-**💰 TOTALS:**
+*💰 TOTALS:*
 - Turkish Lira: ₺{summary['tl_total']:.2f}
 - Malawi Kwacha: {summary['mwk_total']:.2f} MWK
 - Transactions: {summary['transaction_count']}
 - Average per transaction: {summary['average_transaction']:.2f} MWK
 
-**🏪 TOP MERCHANTS:**"""
+*🏪 TOP MERCHANTS:*"""
         
         for i, (merchant, amount) in enumerate(summary['top_merchants'], 1):
             report += f"\n{i}. {merchant}: {amount:.2f} MWK"
         
         report += f"""
 
-**💳 PAYMENT METHODS:**
+*💳 PAYMENT METHODS:*
 - POS Transactions: {summary['rate_breakdown'].get('POS', 0):.2f} MWK
 - ATM Transactions: {summary['rate_breakdown'].get('ATM', 0):.2f} MWK
 
-**📈 INSIGHTS:**
+*📈 INSIGHTS:*
 - Highest spending day: {summary['highest_spending_day']} ({summary['highest_spending_amount']:.2f} MWK)
 - Most frequent merchant: {summary['top_merchant']}
 
@@ -217,20 +217,20 @@ _Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}_"""
         
         month_name = self.format_month_name(summary['month_year'])
         
-        message = f"""📊 **{month_name} Monthly Summary**
+        message = f"""📊 *{month_name} Monthly Summary*
 
-💰 **Total Spending:**
+💰 *Total Spending:*
 ₺{summary['tl_total']:.2f} → {summary['mwk_total']:.2f} MWK
 
-🧾 **Transactions:** {summary['transaction_count']}
-📊 **Average:** {summary['average_transaction']:.2f} MWK per transaction
+🧾 *Transactions:* {summary['transaction_count']}
+📊 *Average:* {summary['average_transaction']:.2f} MWK per transaction
 
-🏪 **Top Merchant:** {summary['top_merchant']}
-💳 **Payment Methods:**
+🏪 *Top Merchant:* {summary['top_merchant']}
+💳 *Payment Methods:*
 • POS: {summary['rate_breakdown'].get('POS', 0):.0f} MWK
 • ATM: {summary['rate_breakdown'].get('ATM', 0):.0f} MWK
 
-📈 **Peak Day:** Day {summary['highest_spending_day']} ({summary['highest_spending_amount']:.0f} MWK)
+📈 *Peak Day:* Day {summary['highest_spending_day']} ({summary['highest_spending_amount']:.0f} MWK)
 
 _Automated monthly report from Dr Budget_"""
         
