@@ -1102,6 +1102,204 @@ ${data.message}
                 "message": f"Expense test failed: {str(e)}"
             }), 500
     
+# Add these routes to your app.py for easy record management
+
+    @app.route('/admin')
+    def admin_dashboard():
+        """Simple admin dashboard"""
+        try:
+            user_count = User.query.count()
+            expense_count = Expense.query.count()
+            
+            html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Database Admin</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            .container {{ max-width: 800px; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .stats {{ display: flex; gap: 20px; margin: 20px 0; }}
+            .stat {{ background: #e8f4fd; padding: 20px; border-radius: 8px; text-align: center; flex: 1; }}
+            .stat h3 {{ margin: 0 0 10px 0; color: #0066cc; }}
+            .stat p {{ margin: 0; font-size: 24px; font-weight: bold; }}
+            .buttons {{ display: flex; gap: 15px; margin: 30px 0; }}
+            .btn {{ padding: 12px 25px; border: none; border-radius: 6px; color: white; text-decoration: none; display: inline-block; font-weight: bold; }}
+            .btn-primary {{ background: #007bff; }}
+            .btn-danger {{ background: #dc3545; }}
+            .btn-success {{ background: #28a745; }}
+            h1 {{ color: #333; margin-bottom: 10px; }}
+            .warning {{ background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 6px; margin: 20px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🛠️ Database Admin</h1>
+            <p>Manage your WhatsApp Receipt Bot database</p>
+            
+            <div class="stats">
+                <div class="stat">
+                    <h3>Users</h3>
+                    <p>{user_count}</p>
+                </div>
+                <div class="stat">
+                    <h3>Expenses</h3>
+                    <p>{expense_count}</p>
+                </div>
+            </div>
+            
+            <div class="buttons">
+                <a href="/admin/expenses" class="btn btn-primary">📋 Manage Expenses</a>
+                <a href="/admin/users" class="btn btn-primary">👥 Manage Users</a>
+                <a href="/expenses" class="btn btn-success">📊 View Data (JSON)</a>
+            </div>
+            
+            <div class="warning">
+                <strong>⚠️ Warning:</strong> Deleting records is permanent. Make sure you want to remove the data before clicking delete buttons.
+            </div>
+        </div>
+    </body>
+    </html>
+            """
+            return html
+            
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    @app.route('/admin/expenses')
+    def admin_view_expenses():
+        """Admin view of all expenses with delete options"""
+        try:
+            expenses = Expense.query.order_by(Expense.created_at.desc()).all()
+            
+            html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Expense Management</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+            .container {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+            th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+            th {{ background-color: #f8f9fa; font-weight: bold; }}
+            .delete-btn {{ background: #dc3545; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; }}
+            .delete-btn:hover {{ background: #c82333; }}
+            .items {{ font-size: 0.9em; color: #666; max-width: 200px; }}
+            .back-btn {{ background: #6c757d; color: white; padding: 10px 20px; border: none; border-radius: 4px; text-decoration: none; display: inline-block; margin-bottom: 20px; }}
+            .stats {{ background: #e8f4fd; padding: 15px; border-radius: 6px; margin-bottom: 20px; }}
+            tr:nth-child(even) {{ background-color: #f8f9fa; }}
+            .amount {{ font-weight: bold; color: #28a745; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <a href="/admin" class="back-btn">← Back to Admin</a>
+            
+            <h1>💰 Expense Management</h1>
+            
+            <div class="stats">
+                <strong>Total expenses:</strong> {len(expenses)} records
+            </div>
+            
+            <table>
+                <tr>
+                    <th>ID</th>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th>Amount</th>
+                    <th>Rate</th>
+                    <th>Items</th>
+                    <th>Actions</th>
+                </tr>"""
+            
+            if not expenses:
+                html += """
+                <tr>
+                    <td colspan="7" style="text-align: center; padding: 40px; color: #666;">
+                        No expenses found. Your database is empty! 🎉
+                    </td>
+                </tr>"""
+            else:
+                for expense in expenses:
+                    items = expense.get_items()
+                    items_text = ", ".join([item.get('name', 'Unknown')[:20] for item in items[:2]])
+                    if len(items) > 2:
+                        items_text += f" + {len(items) - 2} more"
+                    if not items_text:
+                        items_text = "No items"
+                        
+                    html += f"""
+                <tr>
+                    <td>{expense.id}</td>
+                    <td>{expense.expense_date}</td>
+                    <td><strong>{expense.merchant}</strong></td>
+                    <td class="amount">₺{expense.amount_tl:.2f}<br><small>{expense.amount_mwk:.0f} MWK</small></td>
+                    <td>{expense.rate_type}</td>
+                    <td class="items">{items_text}</td>
+                    <td>
+                        <button class="delete-btn" onclick="deleteExpense({expense.id}, '{expense.merchant}')">🗑️ Delete</button>
+                    </td>
+                </tr>"""
+            
+            html += """
+            </table>
+        </div>
+        
+        <script>
+        function deleteExpense(id, merchant) {
+            if (confirm('Are you sure you want to delete this expense?\\n\\nID: ' + id + '\\nMerchant: ' + merchant + '\\n\\nThis action cannot be undone!')) {
+                fetch('/admin/delete-expense/' + id, { method: 'DELETE' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('✅ Expense deleted successfully!');
+                        location.reload();
+                    } else {
+                        alert('❌ Error: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    alert('❌ Network error: ' + error);
+                });
+            }
+        }
+        </script>
+    </body>
+    </html>"""
+            
+            return html
+            
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    @app.route('/admin/delete-expense/<int:expense_id>', methods=['DELETE'])
+    def admin_delete_expense(expense_id):
+        """Delete a specific expense"""
+        try:
+            expense = Expense.query.get(expense_id)
+            if not expense:
+                return jsonify({"success": False, "message": "Expense not found"})
+            
+            # Store details for logging
+            merchant = expense.merchant
+            amount = expense.amount_tl
+            
+            db.session.delete(expense)
+            db.session.commit()
+            
+            logger.info(f"Deleted expense {expense_id}: {merchant} - ₺{amount}")
+            
+            return jsonify({
+                "success": True, 
+                "message": f"Deleted expense: {merchant} - ₺{amount}"
+            })
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error deleting expense {expense_id}: {e}")
+            return jsonify({"success": False, "message": str(e)})
+
     # View all expenses (for debugging)
     @app.route('/expenses')
     def view_expenses():
