@@ -160,6 +160,12 @@ def create_app():
     
     # Main route
     @app.route('/')
+    def catchall():
+        logger.info("✅ CATCHALL HIT")
+        logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Body: {request.get_data(as_text=True)}")
+        return "OK", 200
+
     def index():
         user_count = User.query.count()
         expense_count = Expense.query.count()
