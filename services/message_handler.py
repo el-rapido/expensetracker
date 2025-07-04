@@ -2,6 +2,8 @@ import logging
 import json
 from datetime import datetime
 from services.database_service import DatabaseService
+from models import db, Expense  # Added missing imports
+from sqlalchemy import func, distinct  # Added missing imports
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +81,6 @@ class MessageHandler:
             logger.error(f"Error processing message: {e}")
             # Continue processing other messages even if one fails
 
-
     def handle_text_message(self, message, from_number, user):
         """Handle text messages"""
         text = message.get('text', {}).get('body', '').lower().strip()
@@ -90,8 +91,8 @@ class MessageHandler:
             self.send_welcome_message(from_number)
         elif text in ['help', 'info']:
             self.send_help_message(from_number)
-        elif text in ['total', 'balance', 'summary']:
-            self.send_monthly_total(from_number, user.id)
+        elif text in ['total', 'balance', 'summary', 'totals']:
+            self.send_month_picker(from_number, user.id)
         elif text in ['manual', 'entry', 'add', 'lost receipt', 'no receipt']:
             self.start_manual_entry(from_number)
         elif text.upper() in ['POS', 'ATM']:
@@ -102,7 +103,192 @@ class MessageHandler:
             self.handle_manual_merchant(from_number, user, text)
         else:
             self.send_help_message(from_number)
-    
+
+    def send_month_picker(self, to_number, user_id):
+        """Send month picker with available months and all-time option"""
+        try:
+            # Get all months that have expenses for this user
+            months_with_expenses = db.session.query(
+                distinct(Expense.month_year)
+            ).filter(
+                Expense.user_id == user_id
+            ).order_by(
+                Expense.month_year.desc()
+            ).all()
+            
+            if not months_with_expenses:
+                self.whatsapp.send_message(
+                    to_number,
+                    "📊 **No Expenses Found**\n\nYou haven't recorded any expenses yet!\n\nSend a receipt image or use 'manual' to add an expense."
+                )
+                return
+            
+            # Create month list message
+            available_months = [month[0] for month in months_with_expenses]
+            
+            message = "📊 **Choose Month to View**\n\nSelect which month you'd like to see:"
+            
+            # Create buttons for months + all time
+            buttons = []
+            
+            # Add up to 2 most recent months as buttons (WhatsApp limit is 3 buttons)
+            for i, month_year in enumerate(available_months[:2]):
+                month_name = self.format_month_name(month_year)
+                buttons.append({
+                    "id": f"month_{month_year}",
+                    "title": f"📅 {month_name}"
+                })
+            
+            # Always add "All Time" button
+            buttons.append({
+                "id": "all_time", 
+                "title": "📊 All Time"
+            })
+            
+            # If there are more than 2 months, mention them in the message
+            if len(available_months) > 2:
+                other_months = available_months[2:]
+                message += f"\n\n**Other available months:**"
+                for month_year in other_months:
+                    month_name = self.format_month_name(month_year)
+                    message += f"\n• {month_name}"
+                message += f"\n\nType the month name (e.g., 'June 2025') to view older months."
+            
+            # Send interactive message with buttons
+            self.whatsapp.send_interactive_message(
+                to_number,
+                message,
+                buttons
+            )
+            
+        except Exception as e:
+            logger.error(f"Error sending month picker: {e}")
+            self.whatsapp.send_message(
+                to_number,
+                "❌ Error loading expense months. Please try again."
+            )
+
+    def format_month_name(self, month_year):
+        """Convert '2025-07' to 'July 2025'"""
+        try:
+            from datetime import datetime
+            date_obj = datetime.strptime(month_year, '%Y-%m')
+            return date_obj.strftime('%B %Y')
+        except:
+            return month_year
+
+    def handle_interactive_message(self, message, from_number, user):
+        """Handle button clicks"""
+        try:
+            button_reply = message.get('interactive', {}).get('button_reply', {})
+            button_id = button_reply.get('id')
+            
+            logger.info(f"Button clicked: {button_id} by {from_number}")
+            
+            if button_id == 'pos_rate':
+                self.handle_rate_selection(from_number, user, 'POS')
+            elif button_id == 'atm_rate':
+                self.handle_rate_selection(from_number, user, 'ATM')
+            elif button_id == 'all_time':
+                self.send_all_time_total(from_number, user.id)
+            elif button_id.startswith('month_'):
+                month_year = button_id.replace('month_', '')
+                self.send_specific_month_total(from_number, user.id, month_year)
+            else:
+                self.send_help_message(from_number)
+                
+        except Exception as e:
+            logger.error(f"Error handling interactive message: {e}")
+
+    def send_specific_month_total(self, to_number, user_id, month_year):
+        """Send total for a specific month"""
+        try:
+            totals = DatabaseService.get_monthly_total(user_id, month_year)
+            month_name = self.format_month_name(month_year)
+            
+            if totals['transaction_count'] == 0:
+                message = f"""📊 **{month_name}**
+
+No transactions found for {month_name}.
+
+Use 'total' to see available months."""
+            else:
+                # Get expenses for this month to show breakdown
+                expenses = Expense.query.filter(
+                    Expense.user_id == user_id,
+                    Expense.month_year == month_year
+                ).order_by(Expense.expense_date.desc()).all()
+                
+                message = f"""📊 **{month_name}**
+
+💰 **₺{totals['tl_total']:.2f}** → **{totals['mwk_total']:.2f} MWK**
+🧾 **{totals['transaction_count']} transactions**
+
+**Recent transactions:**"""
+                
+                # Show up to 5 most recent transactions
+                for expense in expenses[:5]:
+                    date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
+                    message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}"
+                
+                if len(expenses) > 5:
+                    message += f"\n... and {len(expenses) - 5} more"
+
+            self.whatsapp.send_message(to_number, message)
+            
+        except Exception as e:
+            logger.error(f"Error sending specific month total: {e}")
+            self.whatsapp.send_message(
+                to_number,
+                f"❌ Error retrieving {month_year} data. Please try again."
+            )
+
+    def send_all_time_total(self, to_number, user_id):
+        """Send all-time total across all months"""
+        try:
+            all_expenses = Expense.query.filter_by(user_id=user_id).order_by(
+                Expense.expense_date.desc()
+            ).all()
+            
+            if not all_expenses:
+                message = """📊 **All-Time Total**
+
+No transactions found.
+
+Send a receipt image or use 'manual' to add your first expense!"""
+            else:
+                total_tl = sum(e.amount_tl for e in all_expenses)
+                total_mwk = sum(e.amount_mwk for e in all_expenses)
+                
+                # Get date range
+                oldest = min(e.expense_date for e in all_expenses if e.expense_date)
+                newest = max(e.expense_date for e in all_expenses if e.expense_date)
+                
+                message = f"""📊 **All-Time Total**
+
+💰 **₺{total_tl:.2f}** → **{total_mwk:.2f} MWK**
+🧾 **{len(all_expenses)} transactions**
+📅 **{oldest.strftime('%b %Y')} - {newest.strftime('%b %Y')}**
+
+**Recent transactions:**"""
+                
+                # Show 5 most recent
+                for expense in all_expenses[:5]:
+                    date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
+                    message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}"
+                
+                if len(all_expenses) > 5:
+                    message += f"\n... and {len(all_expenses) - 5} more"
+
+            self.whatsapp.send_message(to_number, message)
+            
+        except Exception as e:
+            logger.error(f"Error sending all-time total: {e}")
+            self.whatsapp.send_message(
+                to_number,
+                "❌ Error retrieving all-time data. Please try again."
+            )
+
     def handle_image_message(self, message, from_number, user):
         """Handle receipt images"""
         try:
@@ -173,7 +359,7 @@ class MessageHandler:
             
             # Step 3: Show rate selection
             extracted_data = llm_result['data']
-            rate_selection = self.exchange_rate_service.create_rate_selection_message(extracted_data) # type: ignore
+            rate_selection = self.exchange_rate_service.create_rate_selection_message(extracted_data) # type: ignore # type: ignore
             
             # Store pending receipt
             self.pending_receipts[from_number] = extracted_data
@@ -197,24 +383,6 @@ class MessageHandler:
                 from_number,
                 f"❌ Receipt processing failed: {str(e)}"
             )
-    
-    def handle_interactive_message(self, message, from_number, user):
-        """Handle button clicks"""
-        try:
-            button_reply = message.get('interactive', {}).get('button_reply', {})
-            button_id = button_reply.get('id')
-            
-            logger.info(f"Button clicked: {button_id} by {from_number}")
-            
-            if button_id == 'pos_rate':
-                self.handle_rate_selection(from_number, user, 'POS')
-            elif button_id == 'atm_rate':
-                self.handle_rate_selection(from_number, user, 'ATM')
-            else:
-                self.send_help_message(from_number)
-                
-        except Exception as e:
-            logger.error(f"Error handling interactive message: {e}")
     
     def handle_rate_selection(self, from_number, user, rate_type):
         """Handle rate selection and save receipt or manual entry"""
@@ -302,7 +470,7 @@ Use "total" command to see current month anytime."""
     
     def send_welcome_message(self, to_number):
         """Send welcome message"""
-        message = """🤖 **Welcome to Receipt Processor Bot!**
+        message = """🤖 **Welcome to Dr Budget!**
 
 This bot processes your Turkish receipts and tracks your monthly expenses in MWK.
 
@@ -313,7 +481,7 @@ This bot processes your Turkish receipts and tracks your monthly expenses in MWK
 📊 View your monthly total
 
 **Commands:**
-- "total" - Current month total
+- "total" - Choose month or view all-time
 - "manual" - Add expense without receipt
 - "help" - Show help
 
@@ -337,44 +505,17 @@ Let's get started! 🚀"""
 3. Enter merchant name (e.g., "Migros")
 4. Choose rate type (POS/ATM)
 
+**View Expenses:**
+- "total" - Choose month or view all-time
+
 **Commands:**
-- "total" or "summary" - Monthly total
 - "manual" - Add expense without receipt
 - "hello" or "hi" - Welcome message
 
 **Having issues?** Make sure your receipt photo is clear and straight."""
 
         self.whatsapp.send_message(to_number, message)
-    
-    def send_monthly_total(self, to_number, user_id):
-        """Send current month total"""
-        try:
-            current_month = datetime.now().strftime('%Y-%m')
-            totals = DatabaseService.get_monthly_total(user_id, current_month)
-            
-            if totals['transaction_count'] == 0:
-                message = f"""📊 **This Month's Total**
-
-No transactions yet this month.
-
-Send a receipt image to get started! 📸"""
-            else:
-                message = f"""📊 **This Month's Total**
-
-💰 **₺{totals['tl_total']:.2f}** → **{totals['mwk_total']:.2f} MWK**
-🧾 **{totals['transaction_count']} transactions**
-
-_Monthly summary is sent automatically on the 1st of each month._"""
-
-            self.whatsapp.send_message(to_number, message)
-            
-        except Exception as e:
-            logger.error(f"Error sending monthly total: {e}")
-            self.whatsapp.send_message(
-                to_number,
-                "❌ Error retrieving monthly total. Please try again."
-            )
-    
+        
     def start_manual_entry(self, from_number):
         """Start manual entry process"""
         message = """📝 **Manual Entry Mode**
@@ -504,6 +645,9 @@ Just type the merchant/store name:"""
             rate_selection = self.exchange_rate_service.create_rate_selection_message(manual_data) # type: ignore
             
             # Send confirmation and rate selection
+            pos_amount = amount * self.exchange_rate_service.pos_rate if self.exchange_rate_service else 0
+            atm_amount = amount * self.exchange_rate_service.atm_rate if self.exchange_rate_service else 0
+            
             confirmation_message = f"""✅ **Manual Entry Complete**
 
 🏪 **Merchant:** {merchant_name}
@@ -512,8 +656,8 @@ Just type the merchant/store name:"""
 
 **Step 3:** Choose your payment method:
 
-🏪 **POS Rate:** ₺{amount:.2f} → {(amount * self.exchange_rate_service.pos_rate):.2f} MWK  
-🏧 **ATM Rate:** ₺{amount:.2f} → {(amount * self.exchange_rate_service.atm_rate):.2f} MWK""" # type: ignore
+🏪 **POS Rate:** ₺{amount:.2f} → {pos_amount:.2f} MWK
+🏧 **ATM Rate:** ₺{amount:.2f} → {atm_amount:.2f} MWK"""
 
             self.whatsapp.send_message(from_number, confirmation_message)
             
