@@ -2,6 +2,7 @@ import json
 import logging
 import google.generativeai as genai
 from datetime import datetime
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ class LLMService:
         prompt = f"""
 You are a Turkish receipt processing expert. Analyze this OCR text from a Turkish receipt and extract the following information in JSON format.
 
+IMPORTANT: Turkish dates use DD/MM/YY or DD.MM.YY format (day first, then month). Convert to YYYY-MM-DD format carefully.
+
 OCR Text:
 {ocr_text}
 
@@ -36,7 +39,7 @@ Extract and return ONLY a valid JSON object with these fields:
 {{
     "merchant_name": "cleaned merchant/store name",
     "total_amount": float value in Turkish Lira,
-    "date": "YYYY-MM-DD format (use today's date if unclear)",
+    "date": "YYYY-MM-DD format (CRITICAL: Turkish format is DD/MM/YY - day comes first!)",
     "items": [
         {{
             "name": "item name",
@@ -51,9 +54,15 @@ Extract and return ONLY a valid JSON object with these fields:
     "extraction_notes": "any issues or assumptions made"
 }}
 
-Rules:
-- Convert Turkish number format (25,40) to decimal (25.40)
+CRITICAL DATE RULES:
+- Turkish receipts use DD/MM/YY format (day first!)
+- Example: "15/03/25" means March 15, 2025 (not September 15, 2025)
+- Example: "05.07.24" means July 5, 2024 (not May 7, 2024)
+- Convert to YYYY-MM-DD: "15/03/25" → "2025-03-15"
 - If date is unclear, use today's date ({datetime.now().strftime('%Y-%m-%d')})
+
+Other Rules:
+- Convert Turkish number format (25,40) to decimal (25.40)
 - Clean merchant name but keep it recognizable
 - Set confidence based on OCR text clarity
 - Handle Turkish characters properly (ç, ğ, ı, ö, ş, ü)
@@ -109,7 +118,7 @@ Return only valid JSON, no other text or explanation.
             }
     
     def validate_extracted_data(self, data):
-        """Basic validation of LLM extracted data"""
+        """Enhanced validation with Turkish date format handling"""
         
         # Ensure required fields exist
         required_fields = ['merchant_name', 'total_amount', 'date', 'confidence']
@@ -127,13 +136,40 @@ Return only valid JSON, no other text or explanation.
                 data['total_amount'] = None
                 data['confidence'] = 'low'
         
-        # Validate date
+        # ENHANCED DATE VALIDATION
         if data['date']:
             try:
-                datetime.strptime(data['date'], '%Y-%m-%d')
+                # Try to parse the provided date
+                parsed_date = datetime.strptime(data['date'], '%Y-%m-%d')
+                
+                # Check if date is reasonable (not too far in future/past)
+                today = datetime.now()
+                days_diff = abs((parsed_date - today).days)
+                
+                if days_diff > 365:  # More than 1 year difference
+                    logger.warning(f"Date seems incorrect: {data['date']}, using today's date")
+                    data['date'] = today.strftime('%Y-%m-%d')
+                    data['confidence'] = 'medium'
+                    if 'extraction_notes' not in data:
+                        data['extraction_notes'] = ""
+                    data['extraction_notes'] += " Date adjusted (seemed incorrect)."
+                
             except (ValueError, TypeError):
-                data['date'] = datetime.now().strftime('%Y-%m-%d')
-                data['confidence'] = 'medium'
+                # If date parsing fails, try common Turkish formats
+                date_fixed = self.fix_turkish_date(data['date'])
+                if date_fixed:
+                    data['date'] = date_fixed
+                    data['confidence'] = 'medium'
+                    if 'extraction_notes' not in data:
+                        data['extraction_notes'] = ""
+                    data['extraction_notes'] += " Date format corrected."
+                else:
+                    # Use today's date as fallback
+                    data['date'] = datetime.now().strftime('%Y-%m-%d')
+                    data['confidence'] = 'medium'
+                    if 'extraction_notes' not in data:
+                        data['extraction_notes'] = ""
+                    data['extraction_notes'] += " Date unclear, used today's date."
         else:
             data['date'] = datetime.now().strftime('%Y-%m-%d')
         
@@ -151,6 +187,53 @@ Return only valid JSON, no other text or explanation.
             data['confidence'] = 'low'
         
         return data
+    
+    def fix_turkish_date(self, date_str):
+        """Fix Turkish date formats (DD/MM/YY or DD.MM.YY) to YYYY-MM-DD"""
+        
+        if not date_str:
+            return None
+        
+        try:
+            # Common Turkish date patterns
+            
+            # Pattern 1: DD/MM/YY or DD/MM/YYYY
+            pattern1 = r'(\d{1,2})[\/](\d{1,2})[\/](\d{2,4})'
+            match1 = re.search(pattern1, str(date_str))
+            
+            # Pattern 2: DD.MM.YY or DD.MM.YYYY  
+            pattern2 = r'(\d{1,2})[.](\d{1,2})[.](\d{2,4})'
+            match2 = re.search(pattern2, str(date_str))
+            
+            # Pattern 3: DD-MM-YY or DD-MM-YYYY
+            pattern3 = r'(\d{1,2})[-](\d{1,2})[-](\d{2,4})'
+            match3 = re.search(pattern3, str(date_str))
+            
+            match = match1 or match2 or match3
+            
+            if match:
+                day = int(match.group(1))
+                month = int(match.group(2))
+                year = int(match.group(3))
+                
+                # Handle 2-digit years (assume 20xx for years 00-30, 19xx for 31-99)
+                if year < 100:
+                    if year <= 30:
+                        year += 2000
+                    else:
+                        year += 1900
+                
+                # Validate day and month ranges
+                if 1 <= day <= 31 and 1 <= month <= 12:
+                    # Create date object to validate
+                    test_date = datetime(year, month, day)
+                    return test_date.strftime('%Y-%m-%d')
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Date fixing failed for '{date_str}': {e}")
+            return None
     
     def create_confirmation_message(self, extracted_data):
         """Create English confirmation message"""
