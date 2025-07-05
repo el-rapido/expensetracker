@@ -236,7 +236,7 @@ Return only valid JSON, no other text or explanation.
             return None
     
     def create_confirmation_message(self, extracted_data):
-        """Create English confirmation message"""
+        """Create English confirmation message with DD/MM/YYYY date format"""
         
         if not extracted_data.get('success'):
             return f"❌ Receipt processing failed: {extracted_data.get('error', 'Unknown error')}"
@@ -263,12 +263,19 @@ Return only valid JSON, no other text or explanation.
                     items_summary += f"\n   • {item.get('name', 'Unknown')} - ₺{item.get('price', 0):.2f}"
                 items_summary += f"\n   • ... and {items_count - 2} more items"
         
+        # CHANGED: Parse and format date as DD/MM/YYYY
+        try:
+            date_obj = datetime.strptime(data.get('date', ''), '%Y-%m-%d')
+            formatted_date = date_obj.strftime('%d/%m/%Y')
+        except:
+            formatted_date = data.get('date', 'Unknown')
+        
         message = f"""
 {confidence_emoji.get(data.get('confidence', 'low'), '❓')} *Receipt Information*
 
 🏪 *Merchant:* {data.get('merchant_name', 'Unknown')}
 💰 *Total:* ₺{data.get('total_amount', 0):.2f}
-📅 *Date:* {data.get('date', 'Unknown')}
+📅 *Date:* {formatted_date}
 {items_summary}
 
 *Confidence:* {data.get('confidence', 'low').title()}

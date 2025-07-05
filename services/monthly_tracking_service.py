@@ -101,7 +101,7 @@ class MonthlyTrackingService:
 - Highest spending day: {summary['highest_spending_day']} ({summary['highest_spending_amount']:.2f} MWK)
 - Most frequent merchant: {summary['top_merchant']}
 
-_Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}_"""
+_Report generated on {datetime.now().strftime('%d/%m/%Y %H:%M')}_"""
         
         return report
     

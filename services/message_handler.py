@@ -228,9 +228,10 @@ Use 'total' to see available months."""
 
 *Recent transactions:*"""
                 
-                # Show up to 5 most recent transactions
+                # Show up to 5 most recent transactions with DD/MM format
                 for expense in expenses[:5]:
-                    date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
+                    # CHANGED: Use DD/MM format instead of MM/DD
+                    date_str = expense.expense_date.strftime('%d/%m') if expense.expense_date else '??'
                     items = expense.get_items()
                     items_note = f" ({len(items)} items)" if items else ""
                     message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}{items_note}"
@@ -266,25 +267,30 @@ Send a receipt image or use 'manual' to add your first expense!"""
                 total_tl = sum(e.amount_tl for e in all_expenses)
                 total_mwk = sum(e.amount_mwk for e in all_expenses)
                 
-                # Get date range
+                # Get date range with DD/MM/YYYY format
                 oldest = min(e.expense_date for e in all_expenses if e.expense_date)
                 newest = max(e.expense_date for e in all_expenses if e.expense_date)
                 
                 # Count total items
                 total_items = sum(len(e.get_items()) for e in all_expenses)
                 
+                # CHANGED: Use DD/MM/YYYY format
+                oldest_str = oldest.strftime('%d/%m/%Y') if oldest else '??'
+                newest_str = newest.strftime('%d/%m/%Y') if newest else '??'
+                
                 message = f"""📊 *All-Time Total*
 
 💰 *₺{total_tl:.2f}* → *{total_mwk:.2f} MWK*
 🧾 *{len(all_expenses)} transactions*
 🛍️ *{total_items} items tracked*
-📅 *{oldest.strftime('%b %Y')} - {newest.strftime('%b %Y')}*
+📅 *{oldest_str} - {newest_str}*
 
 *Recent transactions:*"""
                 
-                # Show 5 most recent
+                # Show 5 most recent with DD/MM format
                 for expense in all_expenses[:5]:
-                    date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
+                    # CHANGED: Use DD/MM format
+                    date_str = expense.expense_date.strftime('%d/%m') if expense.expense_date else '??'
                     items = expense.get_items()
                     items_note = f" ({len(items)} items)" if items else ""
                     message += f"\n• {date_str} - {expense.merchant}: ₺{expense.amount_tl:.2f}{items_note}"
@@ -330,7 +336,8 @@ Send 'total' for expense summaries"""
                 
                 for i, expense in enumerate(recent_expenses, 1):
                     items = expense.get_items()
-                    date_str = expense.expense_date.strftime('%m/%d') if expense.expense_date else '??'
+                    # CHANGED: Use DD/MM format
+                    date_str = expense.expense_date.strftime('%d/%m') if expense.expense_date else '??'
                     
                     message += f"\n**{i}. {expense.merchant}** ({date_str})"
                     message += f"\n💰 Total: ₺{expense.amount_tl:.2f} → {expense.amount_mwk:.2f} MWK"
@@ -538,13 +545,16 @@ Send 'total' for expense summaries"""
                 if len(items) > 5:
                     items_summary += f"\n   • ... and {len(items) - 5} more items"
             
+            # CHANGED: Format date as DD/MM/YYYY
+            formatted_date = expense_data['expense_date'].strftime('%d/%m/%Y')
+            
             success_message = f"""✅ {entry_type} Saved Successfully!
 
 *This Purchase:*
 🏪 {expense_data['merchant']}
 💰 ₺{expense_data['amount_tl']:.2f} → {expense_data['amount_mwk']:.2f} MWK
 📊 Rate: {expense_data['rate_type']} ({expense_data['rate_used']:.2f})
-📅 Date: {expense_data['expense_date']}{items_summary}
+📅 Date: {formatted_date}{items_summary}
 
 *Monthly Summary ({expense_data['month_year']}):*
 💵 {monthly_total['mwk_total']:.2f} MWK total
@@ -740,7 +750,7 @@ Just type the merchant/store name:"""
             manual_data = {
                 'merchant_name': merchant_name,
                 'total_amount': amount,
-                'date': datetime.now().strftime('%Y-%m-%d'),
+                'date': datetime.now().strftime('%Y-%m-%d'),  # Store as YYYY-MM-DD
                 'items': [],  # No items for manual entries
                 'confidence': 'manual',
                 'receipt_number': None,
@@ -754,11 +764,14 @@ Just type the merchant/store name:"""
             pos_amount = amount * self.exchange_rate_service.pos_rate if self.exchange_rate_service else 0
             atm_amount = amount * self.exchange_rate_service.atm_rate if self.exchange_rate_service else 0
             
+            # CHANGED: Display date in DD/MM/YYYY format
+            display_date = datetime.now().strftime('%d/%m/%Y')
+            
             confirmation_message = f"""✅ *Manual Entry Complete*
 
 🏪 *Merchant:* {merchant_name}
 💰 *Amount:* ₺{amount:.2f}
-📅 *Date:* {manual_data['date']}
+📅 *Date:* {display_date}
 
 *Step 3:* Choose your payment method:
 
