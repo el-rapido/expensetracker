@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 class ExchangeRateService:
     def __init__(self, pos_rate, atm_rate):
         """Initialize with hardcoded exchange rates"""
-        self.pos_rate = pos_rate  # 51.00 MWK per 1 TL
+        self.pos_rate = pos_rate  # 48.00 MWK per 1 TL
         self.atm_rate = atm_rate  # 54.00 MWK per 1 TL
         logger.info(f"Exchange rates initialized - POS: {pos_rate}, ATM: {atm_rate}")
     

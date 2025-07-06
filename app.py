@@ -712,7 +712,7 @@ Use "total" command to see current month anytime."""
         
         <div class="info-box">
             <strong>Exchange Rates:</strong><br>
-            🏪 POS Rate: 1 TL = 51.00 MWK<br>
+            🏪 POS Rate: 1 TL = 48.00 MWK<br>
             🏧 ATM Rate: 1 TL = 54.00 MWK
         </div>
         
@@ -1063,9 +1063,9 @@ ${data.message}
             expense_data = {
                 'merchant': 'Test Market',
                 'amount_tl': 50.75,
-                'amount_mwk': 50.75 * 51.00,  # Using POS rate
+                'amount_mwk': 50.75 * 48.00,  # Using POS rate
                 'rate_type': 'POS',
-                'rate_used': 51.00,
+                'rate_used': 48.00,
                 'expense_date': datetime.now().date(),
                 'month_year': datetime.now().strftime('%Y-%m'),
                 'items': [
