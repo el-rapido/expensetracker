@@ -654,7 +654,43 @@ Use "total" command to see current month anytime."""
                 "error": str(e)
             }), 500
 
-
+    @app.route('/backup-data')
+    def backup_data():
+        """Quick backup of all data"""
+        try:
+            users = User.query.all()
+            expenses = Expense.query.all()
+            
+            backup = {
+                "users": [],
+                "expenses": []
+            }
+            
+            for user in users:
+                backup["users"].append({
+                    "whatsapp_id": user.whatsapp_id,
+                    "phone_number": user.phone_number,
+                    "created_at": user.created_at.isoformat()
+                })
+            
+            for expense in expenses:
+                backup["expenses"].append({
+                    "user_whatsapp_id": expense.user.whatsapp_id,
+                    "merchant": expense.merchant,
+                    "amount_tl": expense.amount_tl,
+                    "amount_mwk": expense.amount_mwk,
+                    "rate_type": expense.rate_type,
+                    "rate_used": expense.rate_used,
+                    "expense_date": expense.expense_date.isoformat() if expense.expense_date else None,
+                    "month_year": expense.month_year,
+                    "items_json": expense.items_json,
+                    "created_at": expense.created_at.isoformat()
+                })
+            
+            return jsonify(backup)
+            
+        except Exception as e:
+            return jsonify({"error": str(e)})
 
     @app.route('/trigger-monthly-summaries')
     def trigger_monthly_summaries():
